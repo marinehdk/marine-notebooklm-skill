@@ -7,9 +7,25 @@ allowed-tools:
 
 # nlm-migrate
 
+Promote reusable domain knowledge from the project notebook to a shared global notebook. User-triggered only — always confirm before running.
+
+## Parameters
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `--content` | text | required | The knowledge text to migrate |
+| `--target-global` | domain name | required | Name of the target global notebook (e.g. `backend-patterns`) |
+| `--title` | text | `"Migrated Knowledge"` | Title for the migrated entry |
+
+Before running, show the user what will be written and to which global notebook, and ask for confirmation.
+
+## Usage
+
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 $INVOKE migrate --content "<knowledge text>" --target-global "<domain>" --title "<title>"
 ```
 
-Always confirm with user before running. Show what will be written and to which global notebook.
+## Available global notebooks
+
+Run `bash $HOME/.claude/skills/nlm/scripts/invoke.sh setup --project-path "$(pwd)"` to list configured global notebooks.

@@ -7,9 +7,39 @@ allowed-tools:
 
 # nlm-ask
 
+Query your NotebookLM notebook for grounded answers. Auto-triggered when Claude encounters knowledge uncertainty.
+
+## Parameters
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `--question` | text | required | The question to ask |
+| `--scope` | `auto\|local\|global` | `auto` | `auto` = local first, fallback to global; `local` = project only; `global` = domain notebooks only |
+| `--format` | `json\|text` | `json` | Output format |
+| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
+
+## Usage
+
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE ask --question "<question>" --project-path "." --scope auto --format json
+$INVOKE ask --question "<question>" --project-path "$(pwd)" --scope auto --format json
 ```
 
-Interpret the JSON output: use `answer` if confidence is `high`/`medium`. If `low`/`not_found`, tell the user and suggest running `/nlm-research`.
+## Output
+
+```json
+{
+  "answer": "...",
+  "confidence": "high|medium|low|not_found",
+  "source_notebook": "local|global",
+  "citations": [{"citation_number": 1, "text": "..."}]
+}
+```
+
+## Confidence handling
+
+| Level | Action |
+|-------|--------|
+| `high` / `medium` | Use the answer directly |
+| `low` | Use with caution, tell user to verify |
+| `not_found` | Tell user notebook has no relevant content; suggest `/nlm-research` |
