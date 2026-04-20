@@ -208,6 +208,116 @@ def cmd_plan(args: list[str]) -> None:
     }, indent=2, ensure_ascii=False))
 
 
+def cmd_research(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm research")
+    parser.add_argument("--topic", required=True)
+    parser.add_argument("--depth", choices=["fast", "deep"], default="fast")
+    parser.add_argument("--add-sources", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--project-path", default=".")
+    parsed = parser.parse_args(args)
+
+    assert_authenticated()
+    project_path = Path(parsed.project_path).expanduser().resolve()
+
+    # Both cases require a local notebook (for context and/or import)
+    cfg = load_project_config(project_path)
+    notebook_id = cfg.get("local_notebook_id")
+    if not notebook_id:
+        print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+        sys.exit(1)
+
+    print(f"🔍 Starting {parsed.depth} research: {parsed.topic[:60]}...", file=sys.stderr)
+    result = client.research(notebook_id, parsed.topic, mode=parsed.depth)
+
+    if result["status"] == "timeout":
+        print(json.dumps({"error": "Research timed out after 180s", "topic": parsed.topic}))
+        sys.exit(1)
+
+    if result["status"] == "error":
+        print(json.dumps({"error": "Research failed to start", "topic": parsed.topic}))
+        sys.exit(1)
+
+    sources_imported = []
+    if parsed.add_sources and result.get("task_id") and result.get("sources"):
+        print(f"📥 Importing {len(result['sources'])} sources into notebook...", file=sys.stderr)
+        sources_imported = client.import_research_sources(
+            notebook_id, result["task_id"], result["sources"]
+        )
+
+    print(json.dumps({
+        "status": "ok",
+        "topic": parsed.topic,
+        "report": result.get("report", ""),
+        "sources": result.get("sources", []),
+        "sources_imported": len(sources_imported),
+        "add_sources": parsed.add_sources,
+    }, indent=2, ensure_ascii=False))
+
+
+def cmd_add(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm add")
+    parser.add_argument("--url", help="Add a web URL as source")
+    parser.add_argument("--note", help="Add text content as a note")
+    parser.add_argument("--title", default="Note", help="Title for text note")
+    parser.add_argument("--project-path", default=".")
+    parsed = parser.parse_args(args)
+
+    if not parsed.url and not parsed.note:
+        print(json.dumps({"error": "Provide --url or --note"}))
+        sys.exit(1)
+
+    assert_authenticated()
+    project_path = Path(parsed.project_path).expanduser().resolve()
+    cfg = load_project_config(project_path)
+    notebook_id = cfg.get("local_notebook_id")
+
+    if not notebook_id:
+        print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+        sys.exit(1)
+
+    if parsed.url:
+        result = client.add_url(notebook_id, parsed.url)
+        print(json.dumps({"status": "ok", "type": "url", "source": result}, indent=2, ensure_ascii=False))
+    else:
+        result = client.add_note(notebook_id, title=parsed.title, content=parsed.note)
+        print(json.dumps({"status": "ok", "type": "note", "note": result}, indent=2, ensure_ascii=False))
+
+
+def cmd_migrate(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm migrate")
+    parser.add_argument("--content", required=True, help="Knowledge content to migrate")
+    parser.add_argument("--target-global", required=True, metavar="DOMAIN",
+                        help="Domain name of target global notebook")
+    parser.add_argument("--title", default="Migrated Knowledge", help="Source title")
+    parsed = parser.parse_args(args)
+
+    assert_authenticated()
+    global_cfg = load_global_config()
+    domain = parsed.target_global.lower()
+
+    target_id = None
+    for nb in global_cfg.get("notebooks", []):
+        if nb.get("domain", "").lower() == domain or nb.get("name", "").lower() == domain:
+            target_id = nb.get("id")
+            break
+
+    if not target_id:
+        available = [nb.get("domain") or nb.get("name") for nb in global_cfg.get("notebooks", [])]
+        print(json.dumps({
+            "error": f"No global notebook found for domain '{domain}'",
+            "available_domains": available,
+        }))
+        sys.exit(1)
+
+    result = client.add_text(target_id, title=parsed.title, content=parsed.content)
+    print(json.dumps({
+        "status": "ok",
+        "migrated_to": domain,
+        "notebook_id": target_id,
+        "source": result,
+    }, indent=2, ensure_ascii=False))
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -222,9 +332,12 @@ def main() -> None:
         cmd_ask(args)
     elif command == "plan":
         cmd_plan(args)
-    elif command in ("research", "add", "migrate"):
-        print(json.dumps({"error": f"Command '{command}' not yet implemented"}))
-        sys.exit(1)
+    elif command == "research":
+        cmd_research(args)
+    elif command == "add":
+        cmd_add(args)
+    elif command == "migrate":
+        cmd_migrate(args)
     else:
         print(f"Unknown command: {command}", file=sys.stderr)
         sys.exit(1)
