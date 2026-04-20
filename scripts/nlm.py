@@ -6,21 +6,19 @@ Usage:
   nlm plan --question "..." --options "A,B,C" [--criteria "x,y,z"]
   nlm research --topic "..." [--add-sources] [--depth fast|deep]
   nlm add --url URL | --note "text" [--title "title"]
-  nlm setup [--project-path PATH] [--auth] [--create TITLE] [--notebook-id UUID]
+  nlm setup [--project-path PATH] [--auth] [--reauth] [--create TITLE] [--notebook-id UUID]
   nlm migrate --content "..." --target-global DOMAIN [--title TITLE]
 """
 
 import argparse
-import asyncio
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.auth import assert_authenticated, import_cookies_from_chrome, is_authenticated
+from lib.auth import assert_authenticated, import_cookies_from_browser, is_authenticated, clear_auth
 from lib.registry import (
     find_notebook_ids, load_global_config, load_project_config,
     save_global_config, save_project_config,
@@ -28,15 +26,18 @@ from lib.registry import (
 from lib import client
 
 
-def _setup_auth() -> bool:
-    """Import Google cookies from local Chrome profile. Returns True if successful."""
+def _do_browser_auth(force: bool = False) -> bool:
+    """Open Chrome for Google login. Returns True if successful."""
+    if not force and is_authenticated():
+        print(json.dumps({"status": "ok", "authenticated": True, "message": "Already authenticated"}))
+        return True
     try:
-        result = import_cookies_from_chrome()
+        result = import_cookies_from_browser()
         print(json.dumps({
             "status": "ok",
             "authenticated": True,
             "cookies_imported": result["cookies_imported"],
-            "message": f"Imported {result['cookies_imported']} cookies from Chrome",
+            "message": f"Authenticated — {result['cookies_imported']} cookies saved",
         }))
         return True
     except Exception as e:
@@ -47,25 +48,21 @@ def _setup_auth() -> bool:
 def cmd_setup(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="nlm setup")
     parser.add_argument("--project-path", default=".")
-    parser.add_argument("--auth", action="store_true", help="Only check/setup auth")
+    parser.add_argument("--auth", action="store_true", help="Open browser to authenticate with Google")
+    parser.add_argument("--reauth", action="store_true", help="Clear existing auth and re-authenticate")
     parser.add_argument("--create", metavar="TITLE", help="Create a new notebook with this title")
     parser.add_argument("--notebook-id", metavar="UUID", help="Use this notebook ID directly")
     parsed = parser.parse_args(args)
 
     project_path = Path(parsed.project_path).expanduser().resolve()
 
+    if parsed.reauth:
+        clear_auth()
+        _do_browser_auth(force=True)
+        return
+
     if parsed.auth:
-        if is_authenticated():
-            print(json.dumps({"status": "ok", "authenticated": True}))
-        else:
-            # Try to authenticate
-            success = _setup_auth()
-            if success and is_authenticated():
-                print(json.dumps({"status": "ok", "authenticated": True}))
-            else:
-                print(json.dumps({"status": "not_authenticated",
-                                  "message": "Open browser to authenticate",
-                                  "run": "notebooklm login"}))
+        _do_browser_auth()
         return
 
     assert_authenticated()
