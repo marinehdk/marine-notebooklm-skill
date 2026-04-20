@@ -20,7 +20,7 @@ def ask(notebook_id: str, question: str) -> dict[str, Any]:
         async with await NotebookLMClient.from_storage() as client:
             result = await client.chat.ask(notebook_id, question)
             refs = [
-                {"citation_number": r.citation_number, "text": r.answer[:200]}
+                {"citation_number": r.citation_number, "text": (r.cited_text or "")[:200]}
                 for r in (result.references or [])
             ]
             return {
