@@ -89,6 +89,57 @@ def cmd_setup(args: list[str]) -> None:
     }, indent=2, ensure_ascii=False))
 
 
+def cmd_ask(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm ask")
+    parser.add_argument("--question", required=True)
+    parser.add_argument("--scope", choices=["auto", "local", "global"], default="auto")
+    parser.add_argument("--format", choices=["json", "text"], default="json")
+    parser.add_argument("--project-path", default=".")
+    parsed = parser.parse_args(args)
+
+    assert_authenticated()
+    project_path = Path(parsed.project_path).expanduser().resolve()
+    notebook_ids = find_notebook_ids(parsed.scope, project_path)
+
+    if not notebook_ids:
+        print(json.dumps({"error": "No notebooks configured. Run: nlm setup"}))
+        sys.exit(1)
+
+    # Try notebooks in order; upgrade to global if local confidence is low/not_found
+    result = None
+    source_notebook = "unknown"
+
+    for i, nb_id in enumerate(notebook_ids):
+        is_local = (i == 0 and parsed.scope in ("local", "auto"))
+        r = client.ask(nb_id, parsed.question)
+
+        # In non-auto modes, always use first notebook
+        if parsed.scope != "auto":
+            result = r
+            source_notebook = "local" if is_local else "global"
+            break
+
+        # In auto mode: use if confidence is good, otherwise try next
+        if r["confidence"] not in ("low", "not_found"):
+            result = r
+            source_notebook = "local" if is_local else "global"
+            break
+
+        # Keep trying (result will be overwritten by next notebook)
+        result = r
+        source_notebook = "local" if is_local else "global"
+
+    result["source_notebook"] = source_notebook
+
+    if parsed.format == "json":
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"\n📝 Answer:\n{result['answer']}\n")
+        print(f"🎯 Confidence: {result['confidence']} (from {source_notebook} notebook)")
+        if result.get("citations"):
+            print(f"📚 {len(result['citations'])} citation(s)")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -99,7 +150,9 @@ def main() -> None:
 
     if command == "setup":
         cmd_setup(args)
-    elif command in ("ask", "plan", "research", "add", "migrate"):
+    elif command == "ask":
+        cmd_ask(args)
+    elif command in ("plan", "research", "add", "migrate"):
         print(json.dumps({"error": f"Command '{command}' not yet implemented"}))
         sys.exit(1)
     else:
