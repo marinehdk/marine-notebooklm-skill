@@ -11,7 +11,9 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,6 +26,20 @@ from lib.registry import (
     save_global_config, save_project_config,
 )
 from lib import client
+
+
+def _setup_auth() -> bool:
+    """Run notebooklm login to set up authentication. Returns True if successful."""
+    try:
+        # Use the system notebooklm CLI
+        result = subprocess.run(
+            ["/opt/homebrew/bin/notebooklm", "login"],
+            text=True,
+            timeout=300
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def cmd_setup(args: list[str]) -> None:
@@ -40,9 +56,14 @@ def cmd_setup(args: list[str]) -> None:
         if is_authenticated():
             print(json.dumps({"status": "ok", "authenticated": True}))
         else:
-            print(json.dumps({"status": "not_authenticated",
-                              "message": "Open browser to authenticate",
-                              "run": "notebooklm login"}))
+            # Try to authenticate
+            success = _setup_auth()
+            if success and is_authenticated():
+                print(json.dumps({"status": "ok", "authenticated": True}))
+            else:
+                print(json.dumps({"status": "not_authenticated",
+                                  "message": "Open browser to authenticate",
+                                  "run": "notebooklm login"}))
         return
 
     assert_authenticated()
