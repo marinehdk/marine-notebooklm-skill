@@ -22,7 +22,7 @@ Query your NotebookLM notebook for grounded answers. Auto-triggered when Claude 
 
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE ask --question "<question>" --project-path "$(pwd)" --scope auto --format json
+$INVOKE ask --question "<question>" --scope auto --format json
 ```
 
 ## Output

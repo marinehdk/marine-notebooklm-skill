@@ -26,8 +26,8 @@ Provide either `--url` or `--note`. If neither is given, ask the user: "Add a UR
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 
 # Add a web URL
-$INVOKE add --url "<URL>" --project-path "$(pwd)"
+$INVOKE add --url "<URL>"
 
 # Add a text note
-$INVOKE add --note "<content>" --title "<title>" --project-path "$(pwd)"
+$INVOKE add --note "<content>" --title "<title>"
 ```

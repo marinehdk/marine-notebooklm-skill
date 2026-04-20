@@ -28,12 +28,12 @@ Trigger NotebookLM's research feature for a topic. Returns a report and source U
 **Read-only (parallel subagent / auto-trigger):**
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE research --topic "<topic>" --depth fast --no-add-sources --project-path "$(pwd)"
+$INVOKE research --topic "<topic>" --depth fast --no-add-sources
 ```
 
 **With import (user-triggered only):**
 ```bash
-$INVOKE research --topic "<topic>" --depth fast --add-sources --project-path "$(pwd)"
+$INVOKE research --topic "<topic>" --depth fast --add-sources
 ```
 
 Research takes 30–120s. Present the `report` and list `sources`.

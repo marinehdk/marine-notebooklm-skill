@@ -28,4 +28,4 @@ $INVOKE migrate --content "<knowledge text>" --target-global "<domain>" --title 
 
 ## Available global notebooks
 
-Run `bash $HOME/.claude/skills/nlm/scripts/invoke.sh setup --project-path "$(pwd)"` to list configured global notebooks.
+Run `bash $HOME/.claude/skills/nlm/scripts/invoke.sh setup` to list configured global notebooks.

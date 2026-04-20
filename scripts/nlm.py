@@ -6,7 +6,7 @@ Usage:
   nlm plan --question "..." --options "A,B,C" [--criteria "x,y,z"]
   nlm research --topic "..." [--add-sources] [--depth fast|deep]
   nlm add --url URL | --note "text" [--title "title"]
-  nlm setup [--project-path PATH] [--auth] [--reauth] [--create TITLE] [--notebook-id UUID]
+  nlm setup [--auth] [--reauth] [--notebook-list] [--create TITLE] [--notebook-id UUID] [--project-path PATH]
   nlm migrate --content "..." --target-global DOMAIN [--title TITLE]
 """
 
@@ -47,11 +47,13 @@ def _do_browser_auth(force: bool = False) -> bool:
 
 def cmd_setup(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="nlm setup")
-    parser.add_argument("--project-path", default=".")
-    parser.add_argument("--auth", action="store_true", help="Open browser to authenticate with Google")
+    parser.add_argument("--auth", action="store_true", help="Open Chrome browser to authenticate with Google")
     parser.add_argument("--reauth", action="store_true", help="Clear existing auth and re-authenticate")
+    parser.add_argument("--notebook-list", action="store_true", help="List all notebooks and select one for this project")
     parser.add_argument("--create", metavar="TITLE", help="Create a new notebook with this title")
-    parser.add_argument("--notebook-id", metavar="UUID", help="Use this notebook ID directly")
+    parser.add_argument("--notebook-id", metavar="UUID", help="Bind this notebook ID to the project directly")
+    parser.add_argument("--project-path", default=".", metavar="PATH",
+                        help="Project root (default: current directory). Only needed when configuring a different project.")
     parsed = parser.parse_args(args)
 
     project_path = Path(parsed.project_path).expanduser().resolve()
@@ -67,7 +69,6 @@ def cmd_setup(args: list[str]) -> None:
 
     assert_authenticated()
 
-    # Resolve notebook ID
     notebook_id = None
     notebook_title = None
 
@@ -78,20 +79,32 @@ def cmd_setup(args: list[str]) -> None:
         nb = client.create_notebook(parsed.create)
         notebook_id = nb["id"]
         notebook_title = nb["title"]
-        print(f"✅ Created notebook: {notebook_title}", file=sys.stderr)
-    else:
-        # List all notebooks and let user choose
+        print(f"Created notebook: {notebook_title}", file=sys.stderr)
+    elif parsed.notebook_list:
+        # Explicit list-and-select
         notebooks = client.list_notebooks()
         if not notebooks:
             print(json.dumps({"error": "No notebooks found. Use --create to create one."}))
             sys.exit(1)
-        output = {
+        print(json.dumps({
             "action": "select_notebook",
-            "message": "Re-run with --notebook-id <id> to configure this project",
+            "message": "Re-run with --notebook-id <id> to bind this project",
             "notebooks": [{"index": i+1, "id": nb["id"], "title": nb["title"]}
                           for i, nb in enumerate(notebooks)],
-        }
-        print(json.dumps(output, indent=2, ensure_ascii=False))
+        }, indent=2, ensure_ascii=False))
+        return
+    else:
+        # No action flags: show current project status
+        config = load_project_config(project_path)
+        nb_id = config.get("local_notebook_id")
+        print(json.dumps({
+            "status": "ok",
+            "authenticated": is_authenticated(),
+            "project_path": str(project_path),
+            "local_notebook_id": nb_id,
+            "global_notebook_ids": config.get("global_notebook_ids", []),
+            "hint": "Use --notebook-list to pick a notebook, or --notebook-id <uuid> to bind directly.",
+        }, indent=2, ensure_ascii=False))
         return
 
     # Save project config

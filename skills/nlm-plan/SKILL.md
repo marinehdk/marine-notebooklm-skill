@@ -24,7 +24,7 @@ If options or question are missing, ask the user before running.
 
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE plan --question "<decision>" --options "A,B" --criteria "performance,maintainability" --project-path "$(pwd)"
+$INVOKE plan --question "<decision>" --options "A,B" --criteria "performance,maintainability"
 ```
 
 ## Output
