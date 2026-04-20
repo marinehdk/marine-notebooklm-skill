@@ -20,7 +20,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from lib.auth import assert_authenticated, is_authenticated
+from lib.auth import assert_authenticated, import_cookies_from_chrome, is_authenticated
 from lib.registry import (
     find_notebook_ids, load_global_config, load_project_config,
     save_global_config, save_project_config,
@@ -29,16 +29,18 @@ from lib import client
 
 
 def _setup_auth() -> bool:
-    """Run notebooklm login to set up authentication. Returns True if successful."""
+    """Import Google cookies from local Chrome profile. Returns True if successful."""
     try:
-        # Use the system notebooklm CLI
-        result = subprocess.run(
-            ["/opt/homebrew/bin/notebooklm", "login"],
-            text=True,
-            timeout=300
-        )
-        return result.returncode == 0
-    except Exception:
+        result = import_cookies_from_chrome()
+        print(json.dumps({
+            "status": "ok",
+            "authenticated": True,
+            "cookies_imported": result["cookies_imported"],
+            "message": f"Imported {result['cookies_imported']} cookies from Chrome",
+        }))
+        return True
+    except Exception as e:
+        print(json.dumps({"status": "error", "message": str(e)}), file=sys.stderr)
         return False
 
 
