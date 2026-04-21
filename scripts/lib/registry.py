@@ -37,14 +37,22 @@ def save_global_config(config: dict) -> None:
 
 
 def _resolve_local_id(config: dict) -> str | None:
-    """支持新 schema (local_notebook.id) 和旧 schema (local_notebook_id) 两种格式。"""
+    """Return the local notebook ID.
+
+    Prefers new schema (local_notebook.id) over old schema (local_notebook_id).
+    Returns None if neither is set.
+    """
     if local_nb := config.get("local_notebook"):
-        return local_nb.get("id")
+        return local_nb.get("id") or config.get("local_notebook_id")
     return config.get("local_notebook_id")
 
 
 def _resolve_global_ids(config: dict) -> list[str]:
-    """支持新 schema (global_notebooks[].id) 和旧 schema (global_notebook_ids) 两种格式。"""
+    """Return list of global notebook IDs.
+
+    Prefers new schema (global_notebooks[].id) over old schema (global_notebook_ids).
+    Returns empty list if neither is set.
+    """
     if global_nbs := config.get("global_notebooks"):
         return [nb.get("id") for nb in global_nbs if nb.get("id")]
     return config.get("global_notebook_ids", [])

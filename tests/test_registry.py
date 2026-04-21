@@ -55,7 +55,6 @@ def test_find_notebook_ids_local_new_schema(tmp_path):
 
 def test_find_notebook_ids_global_new_schema(tmp_path):
     save_project_config(tmp_path, {
-        "local_notebook": None,
         "global_notebooks": [{"id": "g1"}, {"id": "g2"}],
     })
     assert find_notebook_ids("global", tmp_path) == ["g1", "g2"]
@@ -67,8 +66,7 @@ def test_find_notebook_ids_auto_returns_local_first_new_schema(tmp_path):
         "global_notebooks": [{"id": "g1"}],
     })
     result = find_notebook_ids("auto", tmp_path)
-    assert result[0] == "local-id"
-    assert "g1" in result
+    assert result == ["local-id", "g1"]
 
 
 def test_find_notebook_ids_old_schema_migration(tmp_path):
@@ -121,6 +119,12 @@ def test_resolve_local_id_old_schema():
 
 def test_resolve_local_id_empty():
     assert _resolve_local_id({}) is None
+
+
+def test_resolve_local_id_new_schema_missing_id_falls_back():
+    """local_notebook present but without id key falls through to old schema."""
+    config = {"local_notebook": {"title": "No ID"}, "local_notebook_id": "fallback"}
+    assert _resolve_local_id(config) == "fallback"
 
 
 def test_resolve_global_ids_new_schema():
