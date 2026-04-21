@@ -21,25 +21,22 @@ interface OutlineMeta {
   slideCount: number;
 }
 
-function parseArgs(): { dir: string; format?: string } {
+function parseArgs(): { dir: string } {
   const args = process.argv.slice(2);
   let dir = "";
-  let format: string | undefined;
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--format") {
-      format = args[++i];
-    } else if (!args[i].startsWith("-")) {
-      dir = args[i];
+  for (const arg of args) {
+    if (!arg.startsWith("-")) {
+      dir = arg;
     }
   }
 
   if (!dir) {
-    console.error("Usage: bun build-editable-pptx.ts <marine-slides-dir> [--format pptx]");
+    console.error("Usage: bun build-editable-pptx.ts <marine-slides-dir>");
     process.exit(1);
   }
 
-  return { dir, format: format || "pptx" };
+  return { dir };
 }
 
 function parseOutlineMeta(content: string): OutlineMeta {
@@ -224,7 +221,7 @@ function buildSlide(
 }
 
 async function main() {
-  const { dir, format } = parseArgs();
+  const { dir } = parseArgs();
 
   if (!existsSync(dir)) {
     console.error(`Directory not found: ${dir}`);
