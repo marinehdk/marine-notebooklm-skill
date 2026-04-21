@@ -22,6 +22,8 @@ from lib.auth import assert_authenticated, import_cookies_from_browser, is_authe
 from lib.registry import (
     find_notebook_ids, load_global_config, load_project_config,
     save_global_config, save_project_config,
+    load_notebooks_cache, save_notebooks_cache,
+    _resolve_local_id,
 )
 from lib import client
 
@@ -254,7 +256,7 @@ def cmd_research(args: list[str]) -> None:
 
     # Both cases require a local notebook (for context and/or import)
     cfg = load_project_config(project_path)
-    notebook_id = cfg.get("local_notebook_id")
+    notebook_id = _resolve_local_id(cfg)
     if not notebook_id:
         print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
         sys.exit(1)
@@ -302,7 +304,7 @@ def cmd_add(args: list[str]) -> None:
     assert_authenticated()
     project_path = Path(parsed.project_path).expanduser().resolve()
     cfg = load_project_config(project_path)
-    notebook_id = cfg.get("local_notebook_id")
+    notebook_id = _resolve_local_id(cfg)
 
     if not notebook_id:
         print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
