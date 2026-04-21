@@ -181,7 +181,7 @@ function buildSlide(
       const bulletItems = slide.body.map((text) => ({
         text,
         options: {
-          bullet: { type: "bullet", color: style.accent1.color },
+          bullet: { type: "bullet" as const, color: style.accent1.color },
           fontSize: style.body.fontSize,
           fontFace: style.body.fontFace,
           color: style.body.color,
