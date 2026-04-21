@@ -36,20 +36,36 @@ def save_global_config(config: dict) -> None:
     (home / "global.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
 
 
+def _resolve_local_id(config: dict) -> str | None:
+    """支持新 schema (local_notebook.id) 和旧 schema (local_notebook_id) 两种格式。"""
+    if local_nb := config.get("local_notebook"):
+        return local_nb.get("id")
+    return config.get("local_notebook_id")
+
+
+def _resolve_global_ids(config: dict) -> list[str]:
+    """支持新 schema (global_notebooks[].id) 和旧 schema (global_notebook_ids) 两种格式。"""
+    if global_nbs := config.get("global_notebooks"):
+        return [nb.get("id") for nb in global_nbs if nb.get("id")]
+    return config.get("global_notebook_ids", [])
+
+
 def find_notebook_ids(scope: str, project_path: Path) -> list[str]:
-    """Return ordered list of notebook IDs to try for given scope."""
+    """Return ordered list of notebook IDs to try for given scope.
+
+    Supports both new schema (local_notebook/global_notebooks objects)
+    and old schema (local_notebook_id/global_notebook_ids strings) for migration.
+    Global notebooks are now per-project (stored in .nlm/config.json).
+    """
     ids: list[str] = []
+    cfg = load_project_config(project_path)
 
     if scope in ("local", "auto"):
-        cfg = load_project_config(project_path)
-        if local_id := cfg.get("local_notebook_id"):
+        if local_id := _resolve_local_id(cfg):
             ids.append(local_id)
 
     if scope in ("global", "auto"):
-        global_cfg = load_global_config()
-        for nb in global_cfg.get("notebooks", []):
-            if nb_id := nb.get("id"):
-                ids.append(nb_id)
+        ids.extend(_resolve_global_ids(cfg))
 
     return ids
 

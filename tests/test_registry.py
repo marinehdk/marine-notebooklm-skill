@@ -9,6 +9,7 @@ from lib.registry import (
     load_global_config, save_global_config,
     find_notebook_ids,
     load_notebooks_cache, save_notebooks_cache,
+    _resolve_local_id, _resolve_global_ids,
 )
 from datetime import datetime, timedelta
 
@@ -44,25 +45,40 @@ def test_save_and_load_global_config(tmp_path, monkeypatch):
     assert loaded == cfg
 
 
-def test_find_notebook_ids_local(tmp_path):
-    save_project_config(tmp_path, {"local_notebook_id": "local-id", "global_notebook_ids": []})
-    result = find_notebook_ids("local", tmp_path)
-    assert result == ["local-id"]
+def test_find_notebook_ids_local_new_schema(tmp_path):
+    save_project_config(tmp_path, {
+        "local_notebook": {"id": "local-id", "title": "My NB"},
+        "global_notebooks": [],
+    })
+    assert find_notebook_ids("local", tmp_path) == ["local-id"]
 
 
-def test_find_notebook_ids_global(tmp_path, monkeypatch):
-    monkeypatch.setenv("NLM_HOME", str(tmp_path))
-    save_global_config({"notebooks": [{"id": "g1"}, {"id": "g2"}]})
-    result = find_notebook_ids("global", tmp_path)
-    assert result == ["g1", "g2"]
+def test_find_notebook_ids_global_new_schema(tmp_path):
+    save_project_config(tmp_path, {
+        "local_notebook": None,
+        "global_notebooks": [{"id": "g1"}, {"id": "g2"}],
+    })
+    assert find_notebook_ids("global", tmp_path) == ["g1", "g2"]
 
 
-def test_find_notebook_ids_auto_returns_local_first(tmp_path, monkeypatch):
-    monkeypatch.setenv("NLM_HOME", str(tmp_path))
-    save_project_config(tmp_path, {"local_notebook_id": "local-id", "global_notebook_ids": []})
-    save_global_config({"notebooks": [{"id": "g1"}]})
+def test_find_notebook_ids_auto_returns_local_first_new_schema(tmp_path):
+    save_project_config(tmp_path, {
+        "local_notebook": {"id": "local-id", "title": "Local"},
+        "global_notebooks": [{"id": "g1"}],
+    })
     result = find_notebook_ids("auto", tmp_path)
     assert result[0] == "local-id"
+    assert "g1" in result
+
+
+def test_find_notebook_ids_old_schema_migration(tmp_path):
+    """旧格式 config 仍能正常读取（向前兼容）。"""
+    save_project_config(tmp_path, {
+        "local_notebook_id": "old-local",
+        "global_notebook_ids": ["old-g1"],
+    })
+    result = find_notebook_ids("auto", tmp_path)
+    assert result == ["old-local", "old-g1"]
 
 
 def test_load_notebooks_cache_missing(tmp_path):
@@ -91,3 +107,31 @@ def test_load_notebooks_cache_expired(tmp_path):
     cache_file.write_text(json.dumps(data))
     result = load_notebooks_cache(tmp_path)
     assert result is None
+
+
+def test_resolve_local_id_new_schema():
+    config = {"local_notebook": {"id": "new-id", "title": "Test"}}
+    assert _resolve_local_id(config) == "new-id"
+
+
+def test_resolve_local_id_old_schema():
+    config = {"local_notebook_id": "old-id"}
+    assert _resolve_local_id(config) == "old-id"
+
+
+def test_resolve_local_id_empty():
+    assert _resolve_local_id({}) is None
+
+
+def test_resolve_global_ids_new_schema():
+    config = {"global_notebooks": [{"id": "g1"}, {"id": "g2"}]}
+    assert _resolve_global_ids(config) == ["g1", "g2"]
+
+
+def test_resolve_global_ids_old_schema():
+    config = {"global_notebook_ids": ["g1", "g2"]}
+    assert _resolve_global_ids(config) == ["g1", "g2"]
+
+
+def test_resolve_global_ids_empty():
+    assert _resolve_global_ids({}) == []
