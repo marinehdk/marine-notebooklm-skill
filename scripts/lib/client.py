@@ -45,6 +45,7 @@ def list_notebooks() -> list[dict[str, Any]]:
         @classmethod  # type: ignore[misc]
         def _patched(cls, data):
             nb = original(cls, data)
+            # Real creation timestamp is at data[5][8]; data[5][5] is last-accessed.
             if len(data) > 5 and isinstance(data[5], list) and len(data[5]) > 8:
                 ts = data[5][8]
                 if isinstance(ts, list) and ts:
@@ -52,6 +53,9 @@ def list_notebooks() -> list[dict[str, Any]]:
                         real_created[nb.id] = datetime.fromtimestamp(ts[0])
                     except (TypeError, ValueError):
                         pass
+            # data[1] is the sources list; library never parses this field.
+            if isinstance(data[1], list):
+                nb.sources_count = len(data[1])
             return nb
 
         Notebook.from_api_response = _patched
