@@ -14,7 +14,8 @@ Query your NotebookLM notebook for grounded answers. Auto-triggered when Claude 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
 | `--question` | text | required | The question to ask |
-| `--scope` | `auto\|local\|global` | `auto` | `auto` = local first, fallback to global; `local` = project only; `global` = domain notebooks only |
+| `--scope` | `auto\|local\|global` | `auto` | `auto` = local first, then route among globals; `local` = project notebook only; `global` = route among global notebooks |
+| `--on-low-confidence` | `prompt\|research\|silent` | `prompt` | `prompt` = attach hint; `research` = auto fast-research then retry; `silent` = return as-is |
 | `--format` | `json\|text` | `json` | Output format |
 | `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
 
@@ -32,14 +33,32 @@ $INVOKE ask --question "<question>" --scope auto --format json
   "answer": "...",
   "confidence": "high|medium|low|not_found",
   "source_notebook": "local|global",
-  "citations": [{"citation_number": 1, "text": "..."}]
+  "citations": [{"citation_number": 1, "text": "..."}],
+  "next_action": {
+    "type": "suggest_research",
+    "message": "...",
+    "command": "nlm research --topic \"...\" --add-sources --project-path \".\""
+  }
 }
 ```
 
-## Confidence handling
+`next_action` is only present when `confidence` is `low` or `not_found` and `--on-low-confidence` is `prompt` (the default).
 
-| Level | Action |
-|-------|--------|
-| `high` / `medium` | Use the answer directly |
-| `low` | Use with caution, tell user to verify |
-| `not_found` | Tell user notebook has no relevant content; suggest `/nlm-research` |
+## Auto-trigger
+
+Call `nlm ask` when you encounter uncertainty about:
+- Domain-specific concepts in this project (algorithms, specs, standards)
+- Architecture decisions or design patterns documented in notebooks
+- Technical terms you cannot confidently answer from the codebase alone
+
+Do NOT call for: general programming questions, public API docs,
+syntax questions, or anything answerable from code in the current repo.
+
+## Handling results
+
+| confidence | next_action present? | Action |
+|------------|----------------------|--------|
+| `high` / `medium` | No | Use answer directly |
+| `low` | Yes (`suggest_research`) | Tell user coverage is limited; offer to run `/nlm-research` |
+| `not_found` | Yes (`suggest_research`) | Tell user notebook has no relevant content; suggest `/nlm-research` or `--scope global` |
+| any | No (`auto_researched: true`) | Sources were auto-added; answer reflects newly imported content |
