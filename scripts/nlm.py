@@ -23,8 +23,10 @@ from lib.registry import (
     find_notebook_ids, load_global_config, load_project_config,
     save_global_config, save_project_config,
     load_notebooks_cache, save_notebooks_cache,
-    _resolve_local_id,
+    _resolve_local_id, _resolve_global_ids,
 )
+from lib.notebook_router import route_notebooks
+from lib.confidence_handler import handle_confidence
 from lib import client
 
 
@@ -284,41 +286,97 @@ def cmd_ask(args: list[str]) -> None:
     parser.add_argument("--scope", choices=["auto", "local", "global"], default="auto")
     parser.add_argument("--format", choices=["json", "text"], default="json")
     parser.add_argument("--project-path", default=".")
+    parser.add_argument(
+        "--on-low-confidence",
+        choices=["prompt", "research", "silent"],
+        default="prompt",
+    )
     parsed = parser.parse_args(args)
 
     assert_authenticated()
     project_path = Path(parsed.project_path).expanduser().resolve()
-    notebook_ids = find_notebook_ids(parsed.scope, project_path)
 
-    if not notebook_ids:
+    config = load_project_config(project_path)
+    local_nb_id = _resolve_local_id(config)
+    global_nb_ids = _resolve_global_ids(config)
+
+    if not local_nb_id and not global_nb_ids:
         print(json.dumps({"error": "No notebooks configured. Run: nlm setup"}))
         sys.exit(1)
 
-    # Try notebooks in order; upgrade to global if local confidence is low/not_found
+    # Build lookup from cache for router metadata
+    cache = load_notebooks_cache(project_path)
+    cache_by_id: dict[str, dict] = {}
+    if cache:
+        for nb in cache.get("notebooks", []):
+            cache_by_id[nb["id"]] = nb
+
     result = None
     source_notebook = "unknown"
 
-    for i, nb_id in enumerate(notebook_ids):
-        is_local = (i == 0 and parsed.scope in ("local", "auto"))
-        r = client.ask(nb_id, parsed.question)
+    if parsed.scope == "local":
+        if not local_nb_id:
+            print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+            sys.exit(1)
+        result = client.ask(local_nb_id, parsed.question)
+        source_notebook = "local"
 
-        # In non-auto modes, always use first notebook
-        if parsed.scope != "auto":
+    elif parsed.scope == "global":
+        if not global_nb_ids:
+            print(json.dumps({"error": "No global notebooks configured. Run: nlm setup --add-global-notebook UUID"}))
+            sys.exit(1)
+        global_pool = [cache_by_id[uid] for uid in global_nb_ids if uid in cache_by_id]
+        if global_pool and any(nb.get("summary") for nb in global_pool):
+            route = route_notebooks(parsed.question, global_pool)
+            ranked = route.ranked_ids or global_nb_ids[:3]
+        else:
+            ranked = global_nb_ids[:3]
+        for nb_id in ranked:
+            r = client.ask(nb_id, parsed.question)
+            if r["confidence"] not in ("low", "not_found"):
+                result = r
+                source_notebook = "global"
+                break
             result = r
-            source_notebook = "local" if is_local else "global"
-            break
+            source_notebook = "global"
 
-        # In auto mode: use if confidence is good, otherwise try next
-        if r["confidence"] not in ("low", "not_found"):
-            result = r
-            source_notebook = "local" if is_local else "global"
-            break
+    else:  # auto
+        # Phase 1: try local notebook
+        if local_nb_id:
+            result = client.ask(local_nb_id, parsed.question)
+            source_notebook = "local"
 
-        # Keep trying (result will be overwritten by next notebook)
-        result = r
-        source_notebook = "local" if is_local else "global"
+        # Phase 2: if no local or low confidence, route among globals
+        if (result is None or result.get("confidence") in ("low", "not_found")) and global_nb_ids:
+            global_pool = [cache_by_id[uid] for uid in global_nb_ids if uid in cache_by_id]
+            if global_pool and any(nb.get("summary") for nb in global_pool):
+                route = route_notebooks(parsed.question, global_pool)
+                ranked = route.ranked_ids or global_nb_ids[:3]
+            else:
+                ranked = global_nb_ids[:3]
+            for nb_id in ranked:
+                if nb_id == local_nb_id:
+                    continue
+                r = client.ask(nb_id, parsed.question)
+                if r["confidence"] not in ("low", "not_found"):
+                    result = r
+                    source_notebook = "global"
+                    break
+                result = r
+                source_notebook = "global"
+
+    if result is None:
+        print(json.dumps({"error": "No notebooks available to query"}))
+        sys.exit(1)
 
     result["source_notebook"] = source_notebook
+
+    result = handle_confidence(
+        result,
+        mode=parsed.on_low_confidence,
+        local_nb_id=local_nb_id,
+        question=parsed.question,
+    )
 
     if parsed.format == "json":
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -327,6 +385,8 @@ def cmd_ask(args: list[str]) -> None:
         print(f"🎯 Confidence: {result['confidence']} (from {source_notebook} notebook)")
         if result.get("citations"):
             print(f"📚 {len(result['citations'])} citation(s)")
+        if result.get("next_action"):
+            print(f"\n💡 {result['next_action']['message']}")
 
 
 def cmd_plan(args: list[str]) -> None:
