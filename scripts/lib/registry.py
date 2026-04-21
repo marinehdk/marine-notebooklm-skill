@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -51,3 +52,27 @@ def find_notebook_ids(scope: str, project_path: Path) -> list[str]:
                 ids.append(nb_id)
 
     return ids
+
+
+def load_notebooks_cache(project_path: Path) -> dict | None:
+    """返回有效缓存内容，不存在或已过期返回 None。TTL 默认 24h。"""
+    cache_file = Path(project_path) / ".nlm" / "notebooks_cache.json"
+    if not cache_file.exists():
+        return None
+    data = json.loads(cache_file.read_text())
+    cached_at = datetime.fromisoformat(data["cached_at"])
+    ttl = timedelta(hours=data.get("ttl_hours", 24))
+    if datetime.now() - cached_at > ttl:
+        return None
+    return data
+
+
+def save_notebooks_cache(project_path: Path, notebooks: list[dict]) -> None:
+    """将笔记本列表写入缓存，TTL 24h。"""
+    nlm_dir = Path(project_path) / ".nlm"
+    nlm_dir.mkdir(parents=True, exist_ok=True)
+    (nlm_dir / "notebooks_cache.json").write_text(json.dumps({
+        "cached_at": datetime.now().isoformat(timespec="seconds"),
+        "ttl_hours": 24,
+        "notebooks": notebooks,
+    }, indent=2, ensure_ascii=False))
