@@ -124,6 +124,13 @@ def cmd_setup(args: list[str]) -> None:
 
         if not cached:
             raw = client.list_notebooks()
+            # Enrich with AI descriptions (parallel fetch)
+            nb_ids = [nb["id"] for nb in raw]
+            descriptions = client.get_notebook_descriptions(nb_ids)
+            for nb in raw:
+                desc = descriptions.get(nb["id"], {"summary": "", "topics": []})
+                nb["summary"] = desc["summary"]
+                nb["topics"] = desc["topics"]
             save_notebooks_cache(project_path, raw)
             # Build response from raw; no need to reload from disk
             from datetime import datetime
