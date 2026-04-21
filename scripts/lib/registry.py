@@ -55,16 +55,19 @@ def find_notebook_ids(scope: str, project_path: Path) -> list[str]:
 
 
 def load_notebooks_cache(project_path: Path) -> dict | None:
-    """返回有效缓存内容，不存在或已过期返回 None。TTL 默认 24h。"""
+    """返回有效缓存内容，不存在或已过期或损坏返回 None。TTL 默认 24h。"""
     cache_file = Path(project_path) / ".nlm" / "notebooks_cache.json"
     if not cache_file.exists():
         return None
-    data = json.loads(cache_file.read_text())
-    cached_at = datetime.fromisoformat(data["cached_at"])
-    ttl = timedelta(hours=data.get("ttl_hours", 24))
-    if datetime.now() - cached_at > ttl:
+    try:
+        data = json.loads(cache_file.read_text())
+        cached_at = datetime.fromisoformat(data["cached_at"])
+        ttl = timedelta(hours=data.get("ttl_hours", 24))
+        if datetime.now() - cached_at > ttl:
+            return None
+        return data
+    except (json.JSONDecodeError, KeyError, ValueError):
         return None
-    return data
 
 
 def save_notebooks_cache(project_path: Path, notebooks: list[dict]) -> None:

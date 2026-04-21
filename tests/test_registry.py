@@ -84,11 +84,10 @@ def test_load_notebooks_cache_expired(tmp_path):
     notebooks = [{"id": "abc", "title": "Test", "source_count": 0, "description": "", "created_at": ""}]
     save_notebooks_cache(tmp_path, notebooks)
     # 伪造缓存写入时间为 25 小时前
-    import json as _json
     cache_file = tmp_path / ".nlm" / "notebooks_cache.json"
-    data = _json.loads(cache_file.read_text())
+    data = json.loads(cache_file.read_text())
     stale_time = (datetime.now() - timedelta(hours=25)).isoformat(timespec="seconds")
     data["cached_at"] = stale_time
-    cache_file.write_text(_json.dumps(data))
+    cache_file.write_text(json.dumps(data))
     result = load_notebooks_cache(tmp_path)
     assert result is None
