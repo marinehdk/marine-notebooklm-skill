@@ -37,7 +37,13 @@ INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 $INVOKE setup --notebook-list
 ```
 
-将输出中的 `table` 以 Markdown 格式展示给用户，读取 `next_step.hint` 后询问：
+将输出中的 `table` 以 Markdown 格式展示给用户，**必须包含所有列：`#`、`UUID`、`Title`、`Sources`、`Created`**。示例格式：
+
+| # | UUID | Title | Sources | Created |
+|---|------|-------|---------|---------|
+| 1 | 8b3c7934-... | Claude Code实战 | 0 | 2026-04-19 |
+
+读取 `next_step.hint` 后询问：
 > "请选择一个作为本项目的**本地笔记本**（输入序号 # 或 UUID），或告诉我新建一个。"
 
 ### Step 2 — 绑定本地笔记本

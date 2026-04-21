@@ -33,18 +33,44 @@ def ask(notebook_id: str, question: str) -> dict[str, Any]:
 
 def list_notebooks() -> list[dict[str, Any]]:
     async def _run():
-        async with await NotebookLMClient.from_storage() as client:
-            nbs = await client.notebooks.list()
-            return [
-                {
-                    "id":           nb.id,
-                    "title":        nb.title,
-                    "source_count": getattr(nb, "sources_count", 0),
-                    "description":  "",
-                    "created_at":   str(getattr(nb, "created_at", "")),
-                }
-                for nb in nbs
-            ]
+        from datetime import datetime
+        from notebooklm.types import Notebook
+
+        # The library's from_api_response uses data[5][5] (last-accessed time) as
+        # created_at. The real creation timestamp is at data[5][8]. We patch once
+        # for this call to capture the correct value.
+        real_created: dict[str, datetime] = {}
+        original = Notebook.from_api_response.__func__
+
+        @classmethod  # type: ignore[misc]
+        def _patched(cls, data):
+            nb = original(cls, data)
+            if len(data) > 5 and isinstance(data[5], list) and len(data[5]) > 8:
+                ts = data[5][8]
+                if isinstance(ts, list) and ts:
+                    try:
+                        real_created[nb.id] = datetime.fromtimestamp(ts[0])
+                    except (TypeError, ValueError):
+                        pass
+            return nb
+
+        Notebook.from_api_response = _patched
+        try:
+            async with await NotebookLMClient.from_storage() as client:
+                nbs = await client.notebooks.list()
+        finally:
+            Notebook.from_api_response = original
+
+        return [
+            {
+                "id":           nb.id,
+                "title":        nb.title,
+                "source_count": getattr(nb, "sources_count", 0),
+                "description":  "",
+                "created_at":   str(real_created.get(nb.id, getattr(nb, "created_at", ""))),
+            }
+            for nb in nbs
+        ]
     return asyncio.run(_run())
 
 

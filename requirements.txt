@@ -1,1 +1,1 @@
-notebooklm
+git+https://github.com/teng-lin/notebooklm-py.git

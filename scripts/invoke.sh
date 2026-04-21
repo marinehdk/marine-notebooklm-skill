@@ -9,10 +9,14 @@ done
 SKILL_DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 
 PYTHON="$SKILL_DIR/.venv/bin/python"
+REQUIREMENTS="$SKILL_DIR/requirements.txt"
 
 if [ ! -f "$PYTHON" ]; then
-  echo "❌ venv not found. Run: cd $SKILL_DIR && python3 -m venv .venv && .venv/bin/pip install notebooklm" >&2
-  exit 1
+  echo "⏳ Setting up nlm environment (first run)..." >&2
+  python3 -m venv "$SKILL_DIR/.venv" >&2 || { echo "❌ python3 -m venv failed" >&2; exit 1; }
+  "$SKILL_DIR/.venv/bin/pip" install --quiet -r "$REQUIREMENTS" >&2 \
+    || { echo "❌ pip install failed — check your internet connection" >&2; exit 1; }
+  echo "✅ Environment ready." >&2
 fi
 
 exec "$PYTHON" "$SKILL_DIR/scripts/nlm.py" "$@"
