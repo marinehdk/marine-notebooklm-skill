@@ -366,8 +366,12 @@ options:
 
 **生成后**：
 - 如果 `--outline-only`，停止
-- 如果 `skip_outline_review` 为 true → 跳到 Step 5（或 Step 8 如果是 PPTX 模式）
-- 如果 `skip_outline_review` 为 false → 继续 Step 4
+- 如果 `--format pptx`：
+  - 如果 `skip_outline_review` 为 true → 跳到 Step 8
+  - 如果 `skip_outline_review` 为 false → 继续 Step 4
+- 如果 `--format pdf` 或 `--format both`：
+  - 如果 `skip_outline_review` 为 true → 跳到 Step 5
+  - 如果 `skip_outline_review` 为 false → 继续 Step 4
 
 ### Step 4: 审阅大纲（条件触发）
 
@@ -390,10 +394,10 @@ options:
 使用 AskUserQuestion：
 ```
 header: "Confirm"
-question: "准备生成 prompts？"
+question: "准备好继续？"
 options:
   - label: "是，继续（推荐）"
-    description: "生成 image prompts"
+    description: "PPTX模式直接构建，PDF模式生成image prompts"
   - label: "先编辑大纲"
     description: "我将修改 outline.md 后再继续"
   - label: "重新生成大纲"
@@ -404,6 +408,7 @@ options:
 1. 如果"先编辑大纲" → 提示用户编辑 `outline.md`，再次询问
 2. 如果"重新生成大纲" → 返回 Step 3
 3. 如果"是，继续" → PPTX 模式跳到 Step 8，PDF 模式继续 Step 5
+   - **PPTX 模式注意**：此处"是，继续"直接构建 PPTX，不生成也不审阅 prompts
 
 ### Step 5: 生成 Prompts（仅 PDF 模式）
 
@@ -540,6 +545,17 @@ marine-slides 完成！
 2. 重新生成图片
 3. 重新构建 PPTX/PDF
 
+### 使用 `--regenerate`（PPTX 模式）
+
+PPTX 模式下，`--regenerate` 的含义不同：
+- PPTX 模式没有 prompts 和图片，所有内容都在 `outline.md` 中
+- 编辑 `outline.md` 后直接运行 `--build-pptx` 即可
+- 不需要 `--regenerate`，因为没有单页图片需要重新生成
+
+如果用户想修改某一页内容：
+1. 编辑 `outline.md` 中对应幻灯片的条目
+2. 运行 `bun scripts/build-editable-pptx.ts marine-slides/{topic-slug}/`
+
 ## 大纲编辑（PPTX 模式）
 
 PPTX 模式下，用户可以直接编辑 `outline.md`，然后重新构建：
@@ -559,7 +575,8 @@ PPTX 模式下，用户可以直接编辑 `outline.md`，然后重新构建：
 marine-slides/{topic-slug}/
 ├── source-{slug}.md              # 原始内容（文本或 PDF 提取）
 ├── outline.md                    # 生成的大纲（含 STYLE_INSTRUCTIONS）
-├── prompts/                     # 图片 prompts（仅 PDF 模式）
+├── analysis.md                   # 内容分析元数据（用于调试）
+├── prompts/                      # 图片 prompts（仅 PDF 模式）
 │   └── 01-slide-cover.md, ...
 ├── images/                       # 生成的幻灯片图片（仅 PDF 模式）
 │   └── 01-slide-cover.png, ...

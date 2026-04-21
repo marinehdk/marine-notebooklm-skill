@@ -112,6 +112,9 @@ def cmd_setup(args: list[str]) -> None:
         }, indent=2, ensure_ascii=False))
         return
 
+    if parsed.refresh and not parsed.notebook_list:
+        print(json.dumps({"warning": "--refresh has no effect without --notebook-list"}), file=sys.stderr)
+
     assert_authenticated()
 
     # ── Notebook list (with cache) ────────────────────────────────────────────
@@ -122,9 +125,22 @@ def cmd_setup(args: list[str]) -> None:
         if not cached:
             raw = client.list_notebooks()
             save_notebooks_cache(project_path, raw)
-            cache = load_notebooks_cache(project_path)
+            # Build response from raw; no need to reload from disk
+            from datetime import datetime
+            notebooks = raw
+            cache_info = {
+                "cached": False,
+                "cached_at": datetime.now().isoformat(timespec="seconds"),
+                "ttl_hours": 24,
+            }
+        else:
+            notebooks = cache["notebooks"]
+            cache_info = {
+                "cached": True,
+                "cached_at": cache["cached_at"],
+                "ttl_hours": cache["ttl_hours"],
+            }
 
-        notebooks = cache["notebooks"]
         table = [
             {
                 "#": i + 1,
@@ -138,11 +154,7 @@ def cmd_setup(args: list[str]) -> None:
         ]
         print(json.dumps({
             "action": "select_notebook",
-            "cache": {
-                "cached": cached,
-                "cached_at": cache["cached_at"],
-                "ttl_hours": cache["ttl_hours"],
-            },
+            "cache": cache_info,
             "total": len(notebooks),
             "table": table,
             "next_step": {
@@ -156,11 +168,12 @@ def cmd_setup(args: list[str]) -> None:
         return
 
     # ── Helpers: lookup notebook metadata from cache ──────────────────────────
+    _meta_cache = load_notebooks_cache(project_path)
+
     def _get_nb_meta(uuid: str) -> dict:
-        """Fetch notebook metadata from cache. Returns minimal stub if not found."""
-        cache = load_notebooks_cache(project_path)
-        if cache:
-            for nb in cache["notebooks"]:
+        """Fetch notebook metadata from pre-loaded cache. Returns minimal stub if not found."""
+        if _meta_cache:
+            for nb in _meta_cache["notebooks"]:
                 if nb["id"] == uuid:
                     return {
                         "id": nb["id"],
