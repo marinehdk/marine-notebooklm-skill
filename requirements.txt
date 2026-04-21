@@ -1,1 +1,2 @@
 git+https://github.com/teng-lin/notebooklm-py.git
+anthropic>=0.40.0
