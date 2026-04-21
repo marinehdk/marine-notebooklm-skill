@@ -35,7 +35,16 @@ def list_notebooks() -> list[dict[str, Any]]:
     async def _run():
         async with await NotebookLMClient.from_storage() as client:
             nbs = await client.notebooks.list()
-            return [{"id": nb.id, "title": nb.title} for nb in nbs]
+            return [
+                {
+                    "id":           nb.id,
+                    "title":        nb.title,
+                    "source_count": getattr(nb, "sources_count", 0),
+                    "description":  "",
+                    "created_at":   str(getattr(nb, "created_at", "")),
+                }
+                for nb in nbs
+            ]
     return asyncio.run(_run())
 
 
