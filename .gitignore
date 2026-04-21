@@ -17,3 +17,5 @@ tests/
 *.egg-info
 .idea/
 .vscode/
+.nlm/
+data/
