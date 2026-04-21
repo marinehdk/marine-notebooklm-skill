@@ -154,3 +154,29 @@ def import_research_sources(notebook_id: str, task_id: str, sources: list[dict])
             imported = await client.research.import_sources(notebook_id, task_id, sources)
             return imported or []
     return asyncio.run(_run())
+
+
+def get_notebook_descriptions(notebook_ids: list[str]) -> dict[str, dict]:
+    """Fetch AI-generated summary and suggested topics for a list of notebooks.
+
+    Returns a dict keyed by notebook ID:
+      {"summary": str (≤300 chars), "topics": list[str] (≤5 items)}
+    Failed fetches return {"summary": "", "topics": []}.
+    """
+    async def _fetch_one(client, nb_id: str) -> tuple[str, dict]:
+        try:
+            desc = await client.notebooks.get_description(nb_id)
+            summary = (desc.summary or "")[:300]
+            topics = [t.question for t in (desc.suggested_topics or [])[:5]]
+            return nb_id, {"summary": summary, "topics": topics}
+        except Exception:
+            return nb_id, {"summary": "", "topics": []}
+
+    async def _run():
+        async with await NotebookLMClient.from_storage() as client:
+            results = await asyncio.gather(
+                *[_fetch_one(client, nb_id) for nb_id in notebook_ids]
+            )
+            return dict(results)
+
+    return asyncio.run(_run())
