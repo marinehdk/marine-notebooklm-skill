@@ -6,7 +6,7 @@ Usage:
   nlm plan --question "..." --options "A,B,C" [--criteria "x,y,z"]
   nlm research --topic "..." [--add-sources] [--depth fast|deep]
   nlm add --url URL | --note "text" [--title "title"]
-  nlm setup [--auth] [--reauth] [--notebook-list] [--create TITLE] [--notebook-id UUID] [--project-path PATH]
+  nlm setup [--auth] [--reauth] [--notebook-list] [--refresh] [--add-local-notebook UUID] [--add-global-notebook UUID ...] [--create-local TITLE] [--create-global TITLE] [--project-path PATH]
   nlm migrate --content "..." --target-global DOMAIN [--title TITLE]
 """
 
@@ -47,19 +47,48 @@ def _do_browser_auth(force: bool = False) -> bool:
         return False
 
 
+def _next_step_after_local() -> dict:
+    return {
+        "hint": "可选：从列表中选择一个或多个全局参考笔记本",
+        "commands": [
+            "nlm setup --add-global-notebook <UUID>",
+            "nlm setup --add-global-notebook <UUID1> <UUID2>",
+        ],
+        "skip": "如不需要，setup 已完成，可直接使用 nlm ask",
+    }
+
+
+def _next_step_after_global() -> dict:
+    return {
+        "hint": "Setup 完成，可继续追加更多全局参考本或开始使用",
+        "commands": [
+            'nlm ask --question "你的问题"',
+            "nlm setup --add-global-notebook <UUID>",
+        ],
+    }
+
+
 def cmd_setup(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="nlm setup")
-    parser.add_argument("--auth", action="store_true", help="Open Chrome browser to authenticate with Google")
-    parser.add_argument("--reauth", action="store_true", help="Clear existing auth and re-authenticate")
-    parser.add_argument("--notebook-list", action="store_true", help="List all notebooks and select one for this project")
-    parser.add_argument("--create", metavar="TITLE", help="Create a new notebook with this title")
-    parser.add_argument("--notebook-id", metavar="UUID", help="Bind this notebook ID to the project directly")
-    parser.add_argument("--project-path", default=".", metavar="PATH",
-                        help="Project root (default: current directory). Only needed when configuring a different project.")
+    parser.add_argument("--auth", action="store_true")
+    parser.add_argument("--reauth", action="store_true")
+    parser.add_argument("--notebook-list", action="store_true")
+    parser.add_argument("--refresh", action="store_true",
+                        help="Force refresh notebook list from API (bypass cache)")
+    parser.add_argument("--add-local-notebook", metavar="UUID",
+                        help="Bind a notebook as the project local notebook")
+    parser.add_argument("--add-global-notebook", nargs="+", metavar="UUID",
+                        help="Append one or more notebooks as global references")
+    parser.add_argument("--create-local", metavar="TITLE",
+                        help="Create a new notebook and bind it as local")
+    parser.add_argument("--create-global", metavar="TITLE",
+                        help="Create a new notebook and append it as global")
+    parser.add_argument("--project-path", default=".", metavar="PATH")
     parsed = parser.parse_args(args)
 
     project_path = Path(parsed.project_path).expanduser().resolve()
 
+    # ── Auth ──────────────────────────────────────────────────────────────────
     if parsed.reauth:
         clear_auth()
         _do_browser_auth(force=True)
@@ -69,59 +98,164 @@ def cmd_setup(args: list[str]) -> None:
         _do_browser_auth()
         return
 
-    assert_authenticated()
-
-    notebook_id = None
-    notebook_title = None
-
-    if parsed.notebook_id:
-        notebook_id = parsed.notebook_id
-        notebook_title = notebook_id[:12]
-    elif parsed.create:
-        nb = client.create_notebook(parsed.create)
-        notebook_id = nb["id"]
-        notebook_title = nb["title"]
-        print(f"Created notebook: {notebook_title}", file=sys.stderr)
-    elif parsed.notebook_list:
-        # Explicit list-and-select
-        notebooks = client.list_notebooks()
-        if not notebooks:
-            print(json.dumps({"error": "No notebooks found. Use --create to create one."}))
-            sys.exit(1)
-        print(json.dumps({
-            "action": "select_notebook",
-            "message": "Re-run with --notebook-id <id> to bind this project",
-            "notebooks": [{"index": i+1, "id": nb["id"], "title": nb["title"]}
-                          for i, nb in enumerate(notebooks)],
-        }, indent=2, ensure_ascii=False))
-        return
-    else:
-        # No action flags: show current project status
+    # ── Status (bare call) ───────────────────────────────────────────────────
+    if not any([parsed.notebook_list, parsed.add_local_notebook,
+                parsed.add_global_notebook, parsed.create_local, parsed.create_global]):
         config = load_project_config(project_path)
-        nb_id = config.get("local_notebook_id")
         print(json.dumps({
             "status": "ok",
             "authenticated": is_authenticated(),
             "project_path": str(project_path),
-            "local_notebook_id": nb_id,
-            "global_notebook_ids": config.get("global_notebook_ids", []),
-            "hint": "Use --notebook-list to pick a notebook, or --notebook-id <uuid> to bind directly.",
+            "local_notebook": config.get("local_notebook"),
+            "global_notebooks": config.get("global_notebooks", []),
+            "next_step": None,
         }, indent=2, ensure_ascii=False))
         return
 
-    # Save project config
-    config = load_project_config(project_path)
-    config["local_notebook_id"] = notebook_id
-    if "global_notebook_ids" not in config:
-        config["global_notebook_ids"] = []
-    save_project_config(project_path, config)
+    assert_authenticated()
 
-    print(json.dumps({
-        "status": "ok",
-        "project_path": str(project_path),
-        "local_notebook_id": notebook_id,
-        "notebook_title": notebook_title,
-    }, indent=2, ensure_ascii=False))
+    # ── Notebook list (with cache) ────────────────────────────────────────────
+    if parsed.notebook_list:
+        cache = None if parsed.refresh else load_notebooks_cache(project_path)
+        cached = cache is not None
+
+        if not cached:
+            raw = client.list_notebooks()
+            save_notebooks_cache(project_path, raw)
+            cache = load_notebooks_cache(project_path)
+
+        notebooks = cache["notebooks"]
+        table = [
+            {
+                "#": i + 1,
+                "UUID": nb["id"],
+                "Title": nb["title"],
+                "Sources": nb.get("source_count", 0),
+                "Description": nb.get("description", ""),
+                "Created": nb.get("created_at", "")[:16].replace("T", " "),
+            }
+            for i, nb in enumerate(notebooks)
+        ]
+        print(json.dumps({
+            "action": "select_notebook",
+            "cache": {
+                "cached": cached,
+                "cached_at": cache["cached_at"],
+                "ttl_hours": cache["ttl_hours"],
+            },
+            "total": len(notebooks),
+            "table": table,
+            "next_step": {
+                "hint": "选择一个作为本项目的 Local 笔记本，或新建一个",
+                "commands": [
+                    "nlm setup --add-local-notebook <UUID>",
+                    'nlm setup --create-local "<新笔记本名称>"',
+                ],
+            },
+        }, indent=2, ensure_ascii=False))
+        return
+
+    # ── Helpers: lookup notebook metadata from cache ──────────────────────────
+    def _get_nb_meta(uuid: str) -> dict:
+        """Fetch notebook metadata from cache. Returns minimal stub if not found."""
+        cache = load_notebooks_cache(project_path)
+        if cache:
+            for nb in cache["notebooks"]:
+                if nb["id"] == uuid:
+                    return {
+                        "id": nb["id"],
+                        "title": nb.get("title", uuid[:12]),
+                        "source_count": nb.get("source_count", 0),
+                        "description": nb.get("description", ""),
+                    }
+        return {"id": uuid, "title": uuid[:12], "source_count": 0, "description": ""}
+
+    # ── Add local notebook ────────────────────────────────────────────────────
+    if parsed.add_local_notebook:
+        uuid = parsed.add_local_notebook
+        meta = _get_nb_meta(uuid)
+        config = load_project_config(project_path)
+        config["local_notebook"] = meta
+        if "global_notebooks" not in config:
+            config["global_notebooks"] = []
+        config.pop("local_notebook_id", None)
+        config.pop("global_notebook_ids", None)
+        save_project_config(project_path, config)
+        print(json.dumps({
+            "status": "ok",
+            "bound": "local",
+            "local_notebook": meta,
+            "next_step": _next_step_after_local(),
+        }, indent=2, ensure_ascii=False))
+        return
+
+    # ── Add global notebooks ──────────────────────────────────────────────────
+    if parsed.add_global_notebook:
+        config = load_project_config(project_path)
+        existing_global = config.get("global_notebooks", [])
+        existing_ids = {nb["id"] for nb in existing_global}
+        added = []
+        for uuid in parsed.add_global_notebook:
+            if uuid not in existing_ids:
+                meta = _get_nb_meta(uuid)
+                existing_global.append(meta)
+                added.append(meta)
+                existing_ids.add(uuid)
+        config["global_notebooks"] = existing_global
+        if "local_notebook" not in config:
+            config["local_notebook"] = None
+        config.pop("global_notebook_ids", None)
+        save_project_config(project_path, config)
+        print(json.dumps({
+            "status": "ok",
+            "bound": "global",
+            "added": added,
+            "global_notebooks_total": len(existing_global),
+            "next_step": _next_step_after_global(),
+        }, indent=2, ensure_ascii=False))
+        return
+
+    # ── Create local ──────────────────────────────────────────────────────────
+    if parsed.create_local:
+        nb = client.create_notebook(parsed.create_local)
+        meta = {"id": nb["id"], "title": nb["title"], "source_count": 0, "description": ""}
+        config = load_project_config(project_path)
+        config["local_notebook"] = meta
+        if "global_notebooks" not in config:
+            config["global_notebooks"] = []
+        config.pop("local_notebook_id", None)
+        config.pop("global_notebook_ids", None)
+        save_project_config(project_path, config)
+        print(json.dumps({
+            "status": "ok",
+            "bound": "local",
+            "created": True,
+            "local_notebook": meta,
+            "next_step": _next_step_after_local(),
+        }, indent=2, ensure_ascii=False))
+        return
+
+    # ── Create global ─────────────────────────────────────────────────────────
+    if parsed.create_global:
+        nb = client.create_notebook(parsed.create_global)
+        meta = {"id": nb["id"], "title": nb["title"], "source_count": 0, "description": ""}
+        config = load_project_config(project_path)
+        existing_global = config.get("global_notebooks", [])
+        existing_global.append(meta)
+        config["global_notebooks"] = existing_global
+        if "local_notebook" not in config:
+            config["local_notebook"] = None
+        config.pop("global_notebook_ids", None)
+        save_project_config(project_path, config)
+        print(json.dumps({
+            "status": "ok",
+            "bound": "global",
+            "created": True,
+            "added": [meta],
+            "global_notebooks_total": len(existing_global),
+            "next_step": _next_step_after_global(),
+        }, indent=2, ensure_ascii=False))
+        return
 
 
 def cmd_ask(args: list[str]) -> None:
