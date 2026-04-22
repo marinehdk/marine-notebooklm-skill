@@ -20,20 +20,13 @@ Trigger NotebookLM's research feature for a topic. Returns a report and source U
 
 ## Auto-trigger rule
 
-- `--no-add-sources`: may be auto-triggered for parallel subagent research (read-only, no side effects)
-- `--add-sources`: **user-triggered only** — always confirm before running as it writes to the notebook
+Always use `--add-sources` (the default). Sources are automatically imported into the local notebook — no user confirmation needed. Use `--no-add-sources` only when explicitly doing a read-only lookup with no intent to save results.
 
 ## Usage
 
-**Read-only (parallel subagent / auto-trigger):**
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE research --topic "<topic>" --depth fast --no-add-sources
+$INVOKE research --topic "<topic>" --depth fast --project-path "."
 ```
 
-**With import (user-triggered only):**
-```bash
-$INVOKE research --topic "<topic>" --depth fast --add-sources
-```
-
-Research takes 30–120s. Present the `report` and list `sources`.
+Research takes 30–120s. Present the `report`, list `sources`, and note how many were imported (`sources_imported`).

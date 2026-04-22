@@ -293,11 +293,26 @@ class PlanEvaluator:
                     opt = opt.strip()
                     crit = crit.strip()
 
-                    # Try to parse score
+                    # Try to parse score (accept both "4" and "SCORE: 4" formats)
+                    score = None
+                    parse_warning = True
+
+                    # First try the "SCORE: N" format
                     score_match = _SCORE_RE.search(score_part)
                     if score_match:
                         score = int(score_match.group(1))
-                        parsed_scores[(opt, crit)] = (score, reasoning_part, False)
+                        parse_warning = False
+                    else:
+                        # Try to parse plain number (1-5)
+                        score_part_stripped = score_part.split()[0] if score_part else ""
+                        if score_part_stripped.isdigit():
+                            num = int(score_part_stripped)
+                            if 1 <= num <= 5:
+                                score = num
+                                parse_warning = False
+
+                    if score is not None:
+                        parsed_scores[(opt, crit)] = (score, reasoning_part, parse_warning)
                     else:
                         # Score parsing failed
                         parsed_scores[(opt, crit)] = (None, line[:200], True)

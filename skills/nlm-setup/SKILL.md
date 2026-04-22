@@ -20,6 +20,7 @@ INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 | 命令 | 作用 |
 |------|------|
 | `$INVOKE setup` | 查看当前配置（零 API） |
+| `$INVOKE setup --status` | 显式查询本地/全局笔记本绑定状态（零 API） |
 | `$INVOKE setup --auth` | 首次 Google 认证 |
 | `$INVOKE setup --reauth` | 重新认证 |
 | `$INVOKE setup --notebook-list` | 列出账号下所有笔记本（24h 缓存） |

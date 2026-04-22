@@ -15,7 +15,7 @@ Query your NotebookLM notebook for grounded answers. Auto-triggered when Claude 
 |-----------|--------|---------|-------------|
 | `--question` | text | required | The question to ask |
 | `--scope` | `auto\|local\|global` | `auto` | `auto` = local first, then route among globals; `local` = project notebook only; `global` = route among global notebooks |
-| `--on-low-confidence` | `prompt\|research\|silent` | `prompt` | `prompt` = attach hint; `research` = auto fast-research then retry; `silent` = return as-is |
+| `--on-low-confidence` | `prompt\|research\|silent` | `research` | `research` = auto fast-research, import sources, retry; `prompt` = attach hint only; `silent` = return as-is |
 | `--format` | `json\|text` | `json` | Output format |
 | `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
 
@@ -23,7 +23,7 @@ Query your NotebookLM notebook for grounded answers. Auto-triggered when Claude 
 
 ```bash
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE ask --question "<question>" --scope auto --format json
+$INVOKE ask --question "<question>" --scope auto --on-low-confidence research --format json
 ```
 
 ## Output
@@ -56,9 +56,8 @@ syntax questions, or anything answerable from code in the current repo.
 
 ## Handling results
 
-| confidence | next_action present? | Action |
-|------------|----------------------|--------|
-| `high` / `medium` | No | Use answer directly |
-| `low` | Yes (`suggest_research`) | Tell user coverage is limited; offer to run `/nlm-research` |
-| `not_found` | Yes (`suggest_research`) | Tell user notebook has no relevant content; suggest `/nlm-research` or `--scope global` |
-| any | No (`auto_researched: true`) | Sources were auto-added; answer reflects newly imported content |
+| confidence | `auto_researched` | `next_action` present? | Action |
+|------------|-------------------|------------------------|--------|
+| `high` / `medium` | — | No | Use answer directly |
+| any | `true` | No | Sources were auto-imported and answer reflects newly added content; use directly |
+| `low` / `not_found` | — | Yes (`suggest_research`) | Auto-research ran but still low confidence; tell user and offer manual follow-up |
