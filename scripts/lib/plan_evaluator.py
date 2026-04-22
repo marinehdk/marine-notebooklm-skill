@@ -121,3 +121,57 @@ class PlanEvaluator:
 
             reports[option] = report
         return reports
+
+    def _phase3_score(
+        self,
+        evidences: list[CriterionEvidence],
+        research_map: dict[str, str],
+        gap_options: set[str],
+    ) -> list[CriterionScore]:
+        scores: list[CriterionScore] = []
+        for ev in evidences:
+            if ev.option in gap_options:
+                scores.append(CriterionScore(
+                    option=ev.option,
+                    criterion=ev.criterion,
+                    score=None,
+                    reasoning="",
+                    evidence_gap=True,
+                ))
+                continue
+
+            research_section = ""
+            if ev.option in research_map:
+                research_section = f"\nResearch report:\n{research_map[ev.option]}"
+
+            prompt = (
+                f"Evidence gathered about '{ev.option}' on '{ev.criterion}':\n"
+                f"---\n{ev.answer}{research_section}\n---\n"
+                f"Based on the above evidence and your notebook knowledge, "
+                f"score option '{ev.option}' on criterion '{ev.criterion}' from 1 to 5 where:\n"
+                f"  1 = poor  2 = below average  3 = average  4 = good  5 = excellent\n"
+                f"Output format (exactly):\nSCORE: N\nREASONING: one sentence"
+            )
+            r = self._ask(prompt)
+            m = _SCORE_RE.search(r["answer"])
+            if m:
+                reasoning = (
+                    r["answer"].split("REASONING:", 1)[-1].strip()
+                    if "REASONING:" in r["answer"]
+                    else r["answer"][:200]
+                )
+                scores.append(CriterionScore(
+                    option=ev.option,
+                    criterion=ev.criterion,
+                    score=int(m.group(1)),
+                    reasoning=reasoning,
+                ))
+            else:
+                scores.append(CriterionScore(
+                    option=ev.option,
+                    criterion=ev.criterion,
+                    score=None,
+                    reasoning=r["answer"][:200],
+                    parse_warning=True,
+                ))
+        return scores
