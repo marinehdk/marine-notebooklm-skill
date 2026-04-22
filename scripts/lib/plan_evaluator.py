@@ -95,3 +95,29 @@ class PlanEvaluator:
                     source=source,
                 ))
         return evidences
+
+    def _phase2_escalate_research(
+        self, question: str, options_needing_research: list[str]
+    ) -> dict[str, str]:
+        """Returns {option: research_report} for enriched options."""
+        reports: dict[str, str] = {}
+        if not self._local_nb_id:
+            return reports  # research API requires a local notebook
+
+        for option in options_needing_research:
+            if self._research_used >= self.max_research:
+                break
+            topic = f"{question} — focus on option '{option}'"
+
+            fast_result = client.research(self._local_nb_id, topic, mode="fast")
+            self._research_used += 1
+            report = fast_result.get("report", "")
+            quality = _analyzer.assess(report)
+
+            if quality.level in ("low", "not_found") and self._research_used < self.max_research:
+                deep_result = client.research(self._local_nb_id, topic, mode="deep")
+                self._research_used += 1
+                report = deep_result.get("report", report)
+
+            reports[option] = report
+        return reports
