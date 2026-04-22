@@ -3,6 +3,11 @@ import time
 from typing import Any
 
 from notebooklm import NotebookLMClient
+from notebooklm.exceptions import NetworkError
+
+# Timeout for chat.ask operations (seconds).
+# Notebooks with many sources can take 60+s to respond.
+_ASK_TIMEOUT = 120.0
 
 
 def _confidence(answer: str, references: list) -> str:
@@ -15,20 +20,47 @@ def _confidence(answer: str, references: list) -> str:
     return "medium"
 
 
-def ask(notebook_id: str, question: str) -> dict[str, Any]:
+def ask(notebook_id: str, question: str, retries: int = 2, retry_delay: float = 3.0) -> dict[str, Any]:
     async def _run():
-        async with await NotebookLMClient.from_storage() as client:
-            result = await client.chat.ask(notebook_id, question)
-            refs = [
-                {"citation_number": r.citation_number, "text": (r.cited_text or "")[:200]}
-                for r in (result.references or [])
-            ]
-            return {
-                "answer": result.answer,
-                "confidence": _confidence(result.answer, result.references),
-                "citations": refs,
-            }
+        for attempt in range(retries + 1):
+            try:
+                async with await NotebookLMClient.from_storage(
+                    timeout=_ASK_TIMEOUT
+                ) as client:
+                    result = await client.chat.ask(notebook_id, question)
+                    return {
+                        "answer": result.answer,
+                        "confidence": _confidence(result.answer, result.references),
+                    }
+            except NetworkError as e:
+                if attempt < retries:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise
     return asyncio.run(_run())
+
+
+async def ask_async(notebook_id: str, question: str, retries: int = 2, retry_delay: float = 3.0) -> dict[str, Any]:
+    """Async version of ask() for parallel execution of Phase 1 and Phase 3.
+
+    Returns dict with 'answer' and 'confidence' keys.
+    Same retry logic and timeout handling as sync version.
+    """
+    for attempt in range(retries + 1):
+        try:
+            async with await NotebookLMClient.from_storage(
+                timeout=_ASK_TIMEOUT
+            ) as client:
+                result = await client.chat.ask(notebook_id, question)
+                return {
+                    "answer": result.answer,
+                    "confidence": _confidence(result.answer, result.references),
+                }
+        except NetworkError as e:
+            if attempt < retries:
+                await asyncio.sleep(retry_delay)
+            else:
+                raise
 
 
 def list_notebooks() -> list[dict[str, Any]]:
@@ -145,6 +177,51 @@ def research(notebook_id: str, topic: str, mode: str = "fast") -> dict[str, Any]
 
             return {"status": "timeout", "report": "", "sources": [], "task_id": task_id}
     return asyncio.run(_run())
+
+
+async def research_async(notebook_id: str, topic: str, mode: str = "fast", retries: int = 2) -> dict[str, Any]:
+    """Async version of research() for parallel execution.
+
+    Start research and poll until complete. Returns report + sources.
+    Same timeout and retry logic as sync version.
+
+    NOTE: deep research can take 120-180s. Adjust timeout accordingly.
+    fast: 60s timeout, 3s poll interval
+    deep: 180s timeout, 5s poll interval
+    """
+    for attempt in range(retries + 1):
+        try:
+            async with await NotebookLMClient.from_storage() as client:
+                start_result = await client.research.start(notebook_id, topic, mode=mode)
+                if not start_result:
+                    return {"status": "error", "report": "", "sources": [], "task_id": None}
+
+                task_id = start_result.get("task_id")
+                # Extend timeout for deep research
+                timeout_secs = 180 if mode == "deep" else 60
+                poll_interval = 5 if mode == "deep" else 3
+                deadline = time.time() + timeout_secs
+
+                while time.time() < deadline:
+                    poll = await client.research.poll(notebook_id)
+                    if poll.get("status") == "completed":
+                        return {
+                            "status": "completed",
+                            "report": poll.get("report") or poll.get("summary", ""),
+                            "sources": poll.get("sources", []),
+                            "task_id": task_id,
+                        }
+                    if poll.get("status") == "no_research":
+                        await asyncio.sleep(poll_interval)
+                        continue
+                    await asyncio.sleep(poll_interval)
+
+                return {"status": "timeout", "report": "", "sources": [], "task_id": task_id}
+        except NetworkError as e:
+            if attempt < retries:
+                await asyncio.sleep(3.0)  # retry delay
+            else:
+                raise
 
 
 def import_research_sources(notebook_id: str, task_id: str, sources: list[dict]) -> list[dict]:
