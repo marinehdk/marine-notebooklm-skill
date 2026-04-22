@@ -20,7 +20,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from lib.auth import assert_authenticated, import_cookies_from_browser, is_authenticated, clear_auth
 from lib.registry import (
-    find_notebook_ids, load_global_config, load_project_config,
+    load_global_config, load_project_config,
     save_global_config, save_project_config,
     load_notebooks_cache, save_notebooks_cache,
     _resolve_local_id, _resolve_global_ids,
@@ -85,6 +85,8 @@ def cmd_setup(args: list[str]) -> None:
                         help="Create a new notebook and bind it as local")
     parser.add_argument("--create-global", metavar="TITLE",
                         help="Create a new notebook and append it as global")
+    parser.add_argument("--status", action="store_true",
+                        help="Show current notebook bindings without calling API")
     parser.add_argument("--project-path", default=".", metavar="PATH")
     parsed = parser.parse_args(args)
 
@@ -100,9 +102,10 @@ def cmd_setup(args: list[str]) -> None:
         _do_browser_auth()
         return
 
-    # ── Status (bare call) ───────────────────────────────────────────────────
-    if not any([parsed.notebook_list, parsed.add_local_notebook,
-                parsed.add_global_notebook, parsed.create_local, parsed.create_global]):
+    # ── Status (bare call or --status) ──────────────────────────────────────
+    if parsed.status or not any([parsed.notebook_list, parsed.add_local_notebook,
+                                 parsed.add_global_notebook, parsed.create_local,
+                                 parsed.create_global]):
         config = load_project_config(project_path)
         print(json.dumps({
             "status": "ok",
@@ -289,7 +292,7 @@ def cmd_ask(args: list[str]) -> None:
     parser.add_argument(
         "--on-low-confidence",
         choices=["prompt", "research", "silent"],
-        default="prompt",
+        default="research",
     )
     parsed = parser.parse_args(args)
 
@@ -378,6 +381,21 @@ def cmd_ask(args: list[str]) -> None:
         question=parsed.question,
     )
 
+    # Deduplicate citations by text content
+    if result.get("citations"):
+        seen: set[str] = set()
+        deduped = []
+        for cite in result["citations"]:
+            key = cite.get("text", "") if isinstance(cite, dict) else str(cite)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(cite)
+        # Renumber sequentially
+        for i, cite in enumerate(deduped, 1):
+            if isinstance(cite, dict):
+                cite["citation_number"] = i
+        result["citations"] = deduped
+
     if parsed.format == "json":
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
@@ -394,67 +412,28 @@ def cmd_plan(args: list[str]) -> None:
     parser.add_argument("--question", required=True)
     parser.add_argument("--options", required=True, help="Comma-separated options e.g. 'A,B,C'")
     parser.add_argument("--criteria", default="", help="Comma-separated evaluation criteria")
+    parser.add_argument("--max-research", type=int, default=3, dest="max_research")
     parser.add_argument("--project-path", default=".")
     parsed = parser.parse_args(args)
 
     assert_authenticated()
     project_path = Path(parsed.project_path).expanduser().resolve()
-    notebook_ids = find_notebook_ids("auto", project_path)
 
-    if not notebook_ids:
-        print(json.dumps({"error": "No notebooks configured. Run: nlm setup"}))
-        sys.exit(1)
-
-    notebook_id = notebook_ids[0]
     options = [o.strip() for o in parsed.options.split(",") if o.strip()]
     criteria = [c.strip() for c in parsed.criteria.split(",") if c.strip()] if parsed.criteria else []
 
-    matrix: dict[str, dict] = {}
-    answers: dict[str, str] = {}
+    from lib.plan_evaluator import PlanEvaluator
+    evaluator = PlanEvaluator(project_path, max_research=parsed.max_research)
 
-    for option in options:
-        if criteria:
-            q = (f"Regarding: {parsed.question}\n"
-                 f"Evaluate option '{option}' on these criteria: {', '.join(criteria)}. "
-                 f"For each criterion, give a score (high/medium/low) and brief reason.")
-        else:
-            q = (f"Regarding: {parsed.question}\n"
-                 f"What are the pros and cons of option '{option}'?")
+    if not evaluator._local_nb_id and not evaluator._global_nb_ids:
+        print(json.dumps({"error": "No notebooks configured. Run: nlm setup"}))
+        sys.exit(1)
 
-        r = client.ask(notebook_id, q)
-        answers[option] = r["answer"]
-        if criteria:
-            row: dict[str, str] = {}
-            for criterion in criteria:
-                criterion_lower = criterion.lower()
-                answer_lower = r["answer"].lower()
-                if criterion_lower in answer_lower:
-                    # Simple heuristic: look for high/medium/low near criterion mention
-                    idx = answer_lower.find(criterion_lower)
-                    snippet = answer_lower[max(0, idx-20):idx+100]
-                    if "high" in snippet or "excellent" in snippet or "strong" in snippet:
-                        row[criterion] = "high"
-                    elif "low" in snippet or "poor" in snippet or "weak" in snippet:
-                        row[criterion] = "low"
-                    else:
-                        row[criterion] = "medium"
-                else:
-                    row[criterion] = "unknown"
-            matrix[option] = row
+    if not criteria:
+        criteria = evaluator.propose_criteria(parsed.question)
 
-    # Pick recommendation: option with most "high" scores
-    recommendation = options[0]
-    if matrix:
-        scores = {opt: sum(1 for v in scores.values() if v == "high")
-                  for opt, scores in matrix.items()}
-        recommendation = max(scores, key=scores.get)
-
-    print(json.dumps({
-        "recommendation": recommendation,
-        "rationale": answers.get(recommendation, "")[:500],
-        "matrix": matrix,
-        "raw_answers": answers,
-    }, indent=2, ensure_ascii=False))
+    result = evaluator.evaluate(parsed.question, options, criteria)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 def cmd_research(args: list[str]) -> None:
