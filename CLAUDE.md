@@ -135,8 +135,8 @@ INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 | Check auth | `$INVOKE setup --auth` |
 | Quick question | `$INVOKE ask --question "..." --project-path "." --format json` |
 | Compare options | `$INVOKE plan --question "..." --options "A,B" --project-path "."` |
+| Research (default: adds sources) | `$INVOKE research --topic "..." --project-path "."` |
 | Research (read-only) | `$INVOKE research --topic "..." --no-add-sources --project-path "."` |
-| Research + import | `$INVOKE research --topic "..." --add-sources --project-path "."` |
 | Add URL to notebook | `$INVOKE add --url URL --project-path "."` |
 | Add note to notebook | `$INVOKE add --note "..." --title "..." --project-path "."` |
 | Init project | `$INVOKE setup --project-path "."` |
@@ -148,8 +148,8 @@ INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 |--------|--------------|
 | `ask` | ✅ Yes — on knowledge uncertainty |
 | `plan` | ✅ Yes — when evaluating 2+ options |
-| `research --no-add-sources` | ✅ Yes — when dispatched as subagent |
-| `research --add-sources` | ❌ User only |
+| `research` (default: adds sources) | ✅ Yes — default behavior writes sources to local notebook |
+| `research --no-add-sources` | ✅ Yes — when dispatched as subagent or user wants read-only |
 | `add` | ❌ User only |
 | `setup` | ❌ User only |
 | `migrate` | ❌ User only |

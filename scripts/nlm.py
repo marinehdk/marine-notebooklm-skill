@@ -292,7 +292,7 @@ def cmd_ask(args: list[str]) -> None:
     parser.add_argument(
         "--on-low-confidence",
         choices=["prompt", "research", "silent"],
-        default="research",
+        default="prompt",
     )
     parsed = parser.parse_args(args)
 
@@ -314,6 +314,8 @@ def cmd_ask(args: list[str]) -> None:
         for nb in cache.get("notebooks", []):
             cache_by_id[nb["id"]] = nb
 
+    from lib.progress import step, done, info, warn
+
     result = None
     source_notebook = "unknown"
 
@@ -321,8 +323,10 @@ def cmd_ask(args: list[str]) -> None:
         if not local_nb_id:
             print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
             sys.exit(1)
+        step(1, 1, "Querying local notebook...")
         result = client.ask(local_nb_id, parsed.question)
         source_notebook = "local"
+        done(1, 1, f"Got answer (confidence: {result['confidence']})")
 
     elif parsed.scope == "global":
         if not global_nb_ids:
@@ -334,23 +338,29 @@ def cmd_ask(args: list[str]) -> None:
             ranked = route.ranked_ids or global_nb_ids[:3]
         else:
             ranked = global_nb_ids[:3]
-        for nb_id in ranked:
+        for i, nb_id in enumerate(ranked, 1):
+            step(i, len(ranked), f"Querying global notebook {i}/{len(ranked)}...")
             r = client.ask(nb_id, parsed.question)
             if r["confidence"] not in ("low", "not_found"):
                 result = r
                 source_notebook = "global"
+                done(i, len(ranked), f"Got answer (confidence: {r['confidence']})")
                 break
+            info("Low confidence, trying next notebook...")
             result = r
             source_notebook = "global"
 
     else:  # auto
         # Phase 1: try local notebook
         if local_nb_id:
+            step(1, 1, "Querying local notebook...")
             result = client.ask(local_nb_id, parsed.question)
             source_notebook = "local"
+            done(1, 1, f"Got answer (confidence: {result['confidence']})")
 
         # Phase 2: if no local or low confidence, route among globals
         if (result is None or result.get("confidence") in ("low", "not_found")) and global_nb_ids:
+            info("Local confidence low, escalating to global notebooks...")
             global_pool = [cache_by_id[uid] for uid in global_nb_ids if uid in cache_by_id]
             if global_pool and any(nb.get("summary") for nb in global_pool):
                 route = route_notebooks(parsed.question, global_pool)
@@ -360,10 +370,12 @@ def cmd_ask(args: list[str]) -> None:
             for nb_id in ranked:
                 if nb_id == local_nb_id:
                     continue
+                step(1, 1, "Querying global notebook...")
                 r = client.ask(nb_id, parsed.question)
                 if r["confidence"] not in ("low", "not_found"):
                     result = r
                     source_notebook = "global"
+                    done(1, 1, f"Got answer (confidence: {r['confidence']})")
                     break
                 result = r
                 source_notebook = "global"
@@ -454,23 +466,37 @@ def cmd_research(args: list[str]) -> None:
         print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
         sys.exit(1)
 
-    print(f"🔍 Starting {parsed.depth} research: {parsed.topic[:60]}...", file=sys.stderr)
+    from lib.progress import step, done, warn
+
+    total = 3 if parsed.add_sources else 2
+    timeout_label = "60s" if parsed.depth == "fast" else "180s"
+
+    step(1, total, f"Starting {parsed.depth} research (timeout: {timeout_label}): {parsed.topic[:60]}...")
     result = client.research(notebook_id, parsed.topic, mode=parsed.depth)
 
     if result["status"] == "timeout":
-        print(json.dumps({"error": "Research timed out after 180s", "topic": parsed.topic}))
+        warn(f"Research timed out after {timeout_label}")
+        print(json.dumps({"error": f"Research timed out after {timeout_label}", "topic": parsed.topic}))
         sys.exit(1)
 
     if result["status"] == "error":
+        warn("Research failed to start")
         print(json.dumps({"error": "Research failed to start", "topic": parsed.topic}))
         sys.exit(1)
 
+    done(1, total, f"Research complete — {len(result.get('sources', []))} sources found")
+
     sources_imported = []
     if parsed.add_sources and result.get("task_id") and result.get("sources"):
-        print(f"📥 Importing {len(result['sources'])} sources into notebook...", file=sys.stderr)
-        sources_imported = client.import_research_sources(
-            notebook_id, result["task_id"], result["sources"]
-        )
+        step(2, total, f"Importing {len(result['sources'])} sources into notebook...")
+        try:
+            sources_imported = client.import_research_sources(
+                notebook_id, result["task_id"], result["sources"]
+            )
+            done(2, total, f"Imported {len(sources_imported)} sources")
+        except Exception as e:
+            warn(f"Source import failed ({type(e).__name__}) — research results still shown below")
+            sources_imported = []
 
     print(json.dumps({
         "status": "ok",

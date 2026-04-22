@@ -9,6 +9,7 @@ from typing import Optional
 from lib import client
 from lib.answer_analyzer import AnswerAnalyzer
 from lib.notebook_router import route_notebooks
+from lib.progress import step, done, info
 from lib.registry import (
     _resolve_global_ids,
     _resolve_local_id,
@@ -18,6 +19,11 @@ from lib.registry import (
 
 _analyzer = AnswerAnalyzer()
 _SCORE_RE = re.compile(r"SCORE:\s*([1-5])", re.IGNORECASE)
+
+
+def _norm_criterion(s: str) -> str:
+    """Strip markdown bold markers and whitespace from a criterion name."""
+    return s.strip("* ").strip()
 
 
 @dataclass
@@ -257,7 +263,7 @@ class PlanEvaluator:
                 research_section = f"\nResearch report:\n{research_map[ev.option]}"
 
             evidence_lines.append(
-                f"[{ev.option}|{ev.criterion}]\n{ev.answer}{research_section}"
+                f"[{ev.option}|{_norm_criterion(ev.criterion)}]\n{ev.answer}{research_section}"
             )
 
         batch_prompt = (
@@ -319,7 +325,7 @@ class PlanEvaluator:
 
         # Build final scores list in order of evidences
         for ev in to_score:
-            key = (ev.option, ev.criterion)
+            key = (ev.option, _norm_criterion(ev.criterion))
             if key in parsed_scores:
                 score, reasoning, parse_warning = parsed_scores[key]
                 scores.append(CriterionScore(
@@ -358,7 +364,7 @@ class PlanEvaluator:
             f"What are 3-4 key evaluation criteria for choosing between options for: {question}"
         )
         lines = [
-            line.strip().lstrip("-•*0123456789. ")
+            line.strip().lstrip("-•*0123456789. ").rstrip("* ").strip()
             for line in r["answer"].split("\n")
             if line.strip()
         ]
@@ -366,11 +372,24 @@ class PlanEvaluator:
         return criteria or ["performance", "maintainability", "cost", "complexity"]
 
     def evaluate(self, question: str, options: list[str], criteria: list[str]) -> dict:
-        # Phase 1: collect evidence per option×criterion
+        total_phases = 4
+        n_pairs = len(options) * len(criteria)
+
+        # Phase 1: collect evidence per option×criterion (single batch call)
+        step(1, total_phases, f"Collecting evidence for {n_pairs} option×criterion pairs (1 batch call)...")
         evidences = self._phase1_collect_evidence(question, options, criteria)
+        low_conf = sum(1 for ev in evidences if ev.confidence in ("low", "not_found"))
+        done(1, total_phases, f"Evidence collected — {n_pairs - low_conf}/{n_pairs} high/medium confidence")
 
         # Phase 2: research escalation (selective, top 2-3 most problematic options)
+        needy_options = {ev.option for ev in evidences if ev.confidence in ("low", "not_found")}
+        if needy_options:
+            step(2, total_phases, f"Researching {len(needy_options)} low-confidence option(s): {', '.join(sorted(needy_options))}...")
+        else:
+            info(f"[2/{total_phases}] All options have sufficient evidence — skipping research")
         research_map = self._phase2_escalate_research(question, evidences)
+        if needy_options:
+            done(2, total_phases, f"Research complete ({self._research_used} call(s) used)")
 
         # Options still without resolved evidence (budget exhausted)
         low_conf_options = {
@@ -379,10 +398,14 @@ class PlanEvaluator:
         }
         gap_options: set[str] = low_conf_options - set(research_map.keys())
 
-        # Phase 3: structured scoring
+        # Phase 3: structured scoring (single batch call)
+        step(3, total_phases, f"Scoring all {n_pairs} option×criterion pairs (1 batch call)...")
         scores = self._phase3_score(evidences, research_map, gap_options)
+        valid_scores = sum(1 for s in scores if s.score is not None)
+        done(3, total_phases, f"Scoring complete — {valid_scores}/{n_pairs} scored successfully")
 
-        # Phase 4: aggregation
+        # Phase 4: aggregation + rationale
+        step(4, total_phases, "Aggregating scores and generating recommendation...")
         composite, recommendation = self._phase4_aggregate(scores, options)
 
         # Rationale for winning option
@@ -396,6 +419,7 @@ class PlanEvaluator:
                 f"'{recommendation}' selected by default; "
                 f"evidence was insufficient for full comparison."
             )
+        done(4, total_phases, f"Recommendation: {recommendation}")
 
         # Build matrix
         matrix: dict[str, dict] = {opt: {} for opt in options}

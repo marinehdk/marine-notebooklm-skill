@@ -156,23 +156,23 @@ def research(notebook_id: str, topic: str, mode: str = "fast") -> dict[str, Any]
                 return {"status": "error", "report": "", "sources": [], "task_id": None}
 
             task_id = start_result.get("task_id")
-            # Extend timeout for deep research
             timeout_secs = 180 if mode == "deep" else 60
             poll_interval = 5 if mode == "deep" else 3
             deadline = time.time() + timeout_secs
+            seen_in_progress = False
 
             while time.time() < deadline:
                 poll = await client.research.poll(notebook_id)
-                if poll.get("status") == "completed":
+                status = poll.get("status")
+                if status == "in_progress":
+                    seen_in_progress = True
+                if status == "completed" and seen_in_progress:
                     return {
                         "status": "completed",
                         "report": poll.get("report") or poll.get("summary", ""),
                         "sources": poll.get("sources", []),
                         "task_id": task_id,
                     }
-                if poll.get("status") == "no_research":
-                    await asyncio.sleep(poll_interval)
-                    continue
                 await asyncio.sleep(poll_interval)
 
             return {"status": "timeout", "report": "", "sources": [], "task_id": task_id}
@@ -197,29 +197,29 @@ async def research_async(notebook_id: str, topic: str, mode: str = "fast", retri
                     return {"status": "error", "report": "", "sources": [], "task_id": None}
 
                 task_id = start_result.get("task_id")
-                # Extend timeout for deep research
                 timeout_secs = 180 if mode == "deep" else 60
                 poll_interval = 5 if mode == "deep" else 3
                 deadline = time.time() + timeout_secs
+                seen_in_progress = False
 
                 while time.time() < deadline:
                     poll = await client.research.poll(notebook_id)
-                    if poll.get("status") == "completed":
+                    status = poll.get("status")
+                    if status == "in_progress":
+                        seen_in_progress = True
+                    if status == "completed" and seen_in_progress:
                         return {
                             "status": "completed",
                             "report": poll.get("report") or poll.get("summary", ""),
                             "sources": poll.get("sources", []),
                             "task_id": task_id,
                         }
-                    if poll.get("status") == "no_research":
-                        await asyncio.sleep(poll_interval)
-                        continue
                     await asyncio.sleep(poll_interval)
 
                 return {"status": "timeout", "report": "", "sources": [], "task_id": task_id}
         except NetworkError as e:
             if attempt < retries:
-                await asyncio.sleep(3.0)  # retry delay
+                await asyncio.sleep(3.0)
             else:
                 raise
 

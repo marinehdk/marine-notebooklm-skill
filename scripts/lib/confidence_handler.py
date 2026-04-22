@@ -56,11 +56,14 @@ def _research_and_retry(
     research = nlm_client.research(local_nb_id, question, mode="fast")
 
     if research.get("status") == "completed" and research.get("sources"):
-        nlm_client.import_research_sources(
-            local_nb_id,
-            research["task_id"],
-            research["sources"],
-        )
+        try:
+            nlm_client.import_research_sources(
+                local_nb_id,
+                research["task_id"],
+                research["sources"],
+            )
+        except Exception:
+            pass  # import failure is non-fatal; proceed with retry ask
 
     retry = nlm_client.ask(local_nb_id, question)
     retry["auto_researched"] = True
