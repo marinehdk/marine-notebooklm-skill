@@ -54,3 +54,25 @@ class PlanEvaluator:
         if cache:
             for nb in cache.get("notebooks", []):
                 self._cache_by_id[nb["id"]] = nb
+
+    def _pick_notebook(self, question: str) -> str:
+        if self._local_nb_id:
+            return self._local_nb_id
+        if self._global_nb_ids:
+            global_pool = [
+                self._cache_by_id[uid]
+                for uid in self._global_nb_ids
+                if uid in self._cache_by_id
+            ]
+            if global_pool and any(nb.get("summary") for nb in global_pool):
+                try:
+                    route = route_notebooks(question, global_pool)
+                    if route.ranked_ids:
+                        return route.ranked_ids[0]
+                except Exception:
+                    pass
+            return self._global_nb_ids[0]
+        raise ValueError("No notebooks configured. Run: nlm setup")
+
+    def _ask(self, question: str) -> dict:
+        return client.ask(self._pick_notebook(question), question)
