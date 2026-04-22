@@ -76,3 +76,22 @@ class PlanEvaluator:
 
     def _ask(self, question: str) -> dict:
         return client.ask(self._pick_notebook(question), question)
+
+    def _phase1_collect_evidence(
+        self, question: str, options: list[str], criteria: list[str]
+    ) -> list[CriterionEvidence]:
+        source = "local" if self._local_nb_id else "global"
+        evidences: list[CriterionEvidence] = []
+        for option in options:
+            for criterion in criteria:
+                q = f"Evidence for option '{option}' on criterion '{criterion}': {question}"
+                r = self._ask(q)
+                quality = _analyzer.assess(r["answer"])
+                evidences.append(CriterionEvidence(
+                    option=option,
+                    criterion=criterion,
+                    answer=r["answer"],
+                    confidence=quality.level,
+                    source=source,
+                ))
+        return evidences
