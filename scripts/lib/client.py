@@ -9,6 +9,12 @@ from notebooklm.exceptions import NetworkError
 # Notebooks with many sources can take 60+s to respond.
 _ASK_TIMEOUT = 120.0
 
+# Timeout for research source import RPC (seconds).
+# The RPC may timeout while the server continues processing — we verify via sources.list().
+_IMPORT_TIMEOUT = 120.0
+# Timeout for waiting on each source to finish processing after import.
+_IMPORT_WAIT_TIMEOUT = 120.0
+
 
 def _confidence(answer: str, references: list) -> str:
     if not answer or len(answer) < 20:
@@ -225,11 +231,65 @@ async def research_async(notebook_id: str, topic: str, mode: str = "fast", retri
 
 
 def import_research_sources(notebook_id: str, task_id: str, sources: list[dict]) -> list[dict]:
-    """Import research sources into notebook using research.import_sources API."""
+    """Import research sources, then wait for all to finish processing in parallel.
+
+    Strategy:
+    1. Snapshot existing source IDs before import.
+    2. Fire import_sources() — RPC may timeout but server keeps processing.
+    3. Poll sources.list() until new sources appear (max 15s).
+    4. Use wait_for_sources() to await all new sources in parallel.
+    5. Delete any that end up in ERROR state.
+    6. Return only successfully imported sources.
+    """
     async def _run():
-        async with await NotebookLMClient.from_storage() as client:
-            imported = await client.research.import_sources(notebook_id, task_id, sources)
-            return imported or []
+        async with await NotebookLMClient.from_storage(timeout=_IMPORT_TIMEOUT) as client:
+            # Step 1: snapshot existing sources
+            existing = await client.sources.list(notebook_id)
+            existing_ids = {s.id for s in existing}
+
+            # Step 2: fire import (ignore timeout — server continues processing)
+            try:
+                await client.research.import_sources(notebook_id, task_id, sources)
+            except Exception:
+                pass
+
+            # Step 3: poll until new sources appear (up to 15s)
+            new_sources = []
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                await asyncio.sleep(2)
+                current = await client.sources.list(notebook_id)
+                new_sources = [s for s in current if s.id not in existing_ids]
+                if new_sources:
+                    break
+
+            if not new_sources:
+                return []
+
+            # Step 4: wait for all new sources to finish processing in parallel
+            new_ids = [s.id for s in new_sources]
+            try:
+                finished = await client.sources.wait_for_sources(
+                    notebook_id, new_ids, timeout=_IMPORT_WAIT_TIMEOUT
+                )
+            except Exception:
+                current = await client.sources.list(notebook_id)
+                finished = [s for s in current if s.id in set(new_ids)]
+
+            # Step 5: delete failed sources
+            ok, failed = [], []
+            for s in finished:
+                if s.is_error:
+                    failed.append(s)
+                    try:
+                        await client.sources.delete(notebook_id, s.id)
+                    except Exception:
+                        pass
+                else:
+                    ok.append(s)
+
+            return [{"id": s.id, "title": s.title} for s in ok]
+
     return asyncio.run(_run())
 
 
