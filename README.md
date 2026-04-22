@@ -16,7 +16,7 @@ Session is stored at `~/.notebooklm/storage_state.json` and reused silently on a
 ```bash
 /nlm-setup
 ```
-Lists your NotebookLM notebooks → select one → saves config to `<project>/.nlm/config.json`.
+Lists your NotebookLM notebooks → select one as local → optionally add global reference notebooks → saves config to `<project>/.nlm/config.json`.
 
 ### 3. Start querying
 ```bash
@@ -44,8 +44,19 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh ask \
   --question "..." \
   --project-path "$(pwd)" \
   --scope auto \
+  --on-low-confidence research \
   --format json
 ```
+
+**Parameters:**
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `--question` | text | required | The question to ask |
+| `--scope` | `auto\|local\|global` | `auto` | `auto` = local first, then fallback to global |
+| `--on-low-confidence` | `prompt\|research\|silent` | `research` | `research` = auto fast-research + import + retry; `prompt` = attach hint only; `silent` = return as-is |
+| `--format` | `json\|text` | `json` | Output format |
+| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
 
 **Output:**
 ```json
@@ -53,16 +64,28 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh ask \
   "answer": "...",
   "confidence": "high|medium|low|not_found",
   "source_notebook": "local|global",
-  "citations": [{"citation_number": 1, "text": "..."}]
+  "source_notebook_id": "6c20d15e-...",
+  "source_notebook_title": "My Project Notebook",
+  "citations": [{"citation_number": 1, "text": "..."}],
+  "auto_researched": true,
+  "next_action": {
+    "type": "suggest_research",
+    "message": "...",
+    "command": "nlm research --topic \"...\" --add-sources --project-path \".\""
+  }
 }
 ```
 
-**Confidence levels:**
-| Level | Action |
-|-------|--------|
-| `high` / `medium` | Use the answer directly |
-| `low` | Use with caution, tell user to verify |
-| `not_found` | Notebook has no relevant content — suggest `/nlm-research` |
+`auto_researched` is present when `--on-low-confidence research` triggered an automatic research + import cycle.  
+`next_action` is only present when confidence is `low`/`not_found` and auto-research was attempted but still insufficient.
+
+**Handling results:**
+
+| confidence | `auto_researched` | `next_action` present? | Action |
+|------------|-------------------|------------------------|--------|
+| `high` / `medium` | — | No | Use answer directly |
+| any | `true` | No | Sources auto-imported; answer reflects new content — use directly |
+| `low` / `not_found` | — | Yes (`suggest_research`) | Auto-research ran but still low confidence; tell user, offer manual follow-up |
 
 **Scope modes:**
 - `auto` (default) — Local notebook first; falls back to global on low/not_found
@@ -86,35 +109,77 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh plan \
   --question "..." \
   --options "Option A,Option B" \
   --criteria "performance,maintainability" \
+  --max-research 3 \
   --project-path "$(pwd)"
 ```
+
+**Parameters:**
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `--question` | text | required | The decision being evaluated |
+| `--options` | `"A,B,C"` | required | Comma-separated options to compare |
+| `--criteria` | `"x,y,z"` | optional | Evaluation criteria (auto-proposed if omitted) |
+| `--max-research` | integer | `3` | Max research calls allowed |
+| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
 
 **Output:**
 ```json
 {
   "recommendation": "Option A",
-  "rationale": "Based on notebook evidence...",
+  "composite_scores": {"Option A": 4.2, "Option B": 3.0},
   "matrix": {
-    "Option A": {"performance": "high", "maintainability": "medium"},
-    "Option B": {"performance": "medium", "maintainability": "high"}
-  }
+    "Option A": {
+      "performance": {"score": 5, "reasoning": "..."},
+      "cost": {"score": 3, "reasoning": "...", "evidence_gap": true}
+    },
+    "Option B": {
+      "performance": {"score": 3, "reasoning": "..."},
+      "cost": {"score": 2, "reasoning": "..."}
+    }
+  },
+  "rationale": "Option A scored highest overall (4.2 vs 3.0)...",
+  "research_used": 2,
+  "max_research": 3,
+  "evidence_gaps": ["Option B / cost"]
 }
 ```
 
+**Score scale:**
+
+| Score | Meaning |
+|-------|---------|
+| 5 | Excellent |
+| 4 | Good |
+| 3 | Average |
+| 2 | Below average |
+| 1 | Poor |
+
+**Research escalation:** When notebook evidence is low confidence for an option, `nlm-plan` automatically runs research (fast → deep if still insufficient). `research_used` shows calls made; `evidence_gaps` lists option/criterion pairs uncovered within `--max-research`.
+
+**Field reference:**
+
+| Field | Always present | Description |
+|-------|---------------|-------------|
+| `recommendation` | ✅ | Option with highest composite score |
+| `composite_scores` | ✅ | Per-option mean of valid scores (1 decimal) |
+| `matrix` | ✅ | Per-option, per-criterion scores and reasoning |
+| `rationale` | ✅ | One-sentence justification for recommendation |
+| `research_used` | ✅ | Number of research calls made |
+| `max_research` | ✅ | The `--max-research` cap used |
+| `evidence_gaps` | ✅ | List of `"option / criterion"` pairs with no evidence |
+| `evidence_gap` | On matrix entry | Research cap exhausted before covering this pair |
+| `parse_warning` | On matrix entry | Score format not parseable; score=null |
+
 ---
 
-### `/nlm-research` — Deep research with optional import
-**When to use:** Investigate a topic; optionally add found sources to notebook.  
-**Auto-trigger:** Read-only mode only (`--no-add-sources`). Never auto-triggered with `--add-sources`.
+### `/nlm-research` — Deep research with automatic source import
+**When to use:** Investigate a topic and add found sources to your notebook.  
+**Auto-trigger:** Yes (default `--add-sources`). Use `--no-add-sources` only for read-only lookups.
 
-**Read-only (no side effects):**
 ```bash
 /nlm-research Redis caching patterns
-```
-
-**With import (explicit user request only — writes to notebook):**
-```bash
-/nlm-research --topic "Kubernetes networking" --add-sources
+/nlm-research --topic "Kubernetes networking" --depth deep
 ```
 
 **Behind the scenes:**
@@ -122,14 +187,14 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh plan \
 bash ~/.claude/skills/nlm/scripts/invoke.sh research \
   --topic "..." \
   --depth fast|deep \
-  --add-sources | --no-add-sources \
+  --add-sources \
   --project-path "$(pwd)"
 ```
 
 **Parameters:**
 - `--depth fast` — 60s timeout
 - `--depth deep` — 180s timeout
-- `--add-sources` — Import found URLs into local notebook (user-triggered only)
+- `--add-sources` (default) — Import found URLs into local notebook automatically
 - `--no-add-sources` — Return report only, no writes
 
 ---
@@ -161,21 +226,38 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 **Trigger:** User only.
 
 ```bash
+# View current binding (no API call)
+/nlm-setup
+
 # Authenticate (opens Chrome browser)
 /nlm-setup --auth
 
-# List notebooks and select one
-/nlm-setup
-
-# Direct binding
-/nlm-setup --notebook-id "<uuid>"
-
-# Create new notebook
-/nlm-setup --create "Project Research Notes"
-
 # Re-authenticate (clears saved session)
 /nlm-setup --reauth
+
+# List all notebooks in account (24h cached)
+/nlm-setup --notebook-list
+
+# Force refresh notebook list
+/nlm-setup --notebook-list --refresh
+
+# Bind an existing notebook as local
+/nlm-setup --add-local-notebook <UUID>
+
+# Add one or more global reference notebooks
+/nlm-setup --add-global-notebook <UUID1> <UUID2>
+
+# Create new notebook and bind as local
+/nlm-setup --create-local "Project Research Notes"
+
+# Create new notebook and add as global
+/nlm-setup --create-global "Domain Patterns"
 ```
+
+**Standard init flow (3 steps):**
+1. Run `--notebook-list` → presents a table with `#`, `UUID`, `Title`, `Sources`, `Created`
+2. Select a notebook as local → run `--add-local-notebook <UUID>`
+3. Optionally add global reference notebooks → run `--add-global-notebook <UUID1> ...`
 
 **Auth flow:** Uses `patchright` with `channel="chrome"` to launch your real Chrome browser. Google sees a genuine browser — no Bluetooth/passkey prompts. Session saved to `~/.notebooklm/storage_state.json`.
 
@@ -200,8 +282,8 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 |---------|--------------|------|
 | `/nlm-ask` | ✅ Yes | Claude encounters knowledge uncertainty |
 | `/nlm-plan` | ✅ Yes | User evaluates 2+ options |
-| `/nlm-research --no-add-sources` | ✅ Yes | Parallel subagent research dispatch |
-| `/nlm-research --add-sources` | ❌ No | User-triggered only (writes to notebook) |
+| `/nlm-research` (default: `--add-sources`) | ✅ Yes | Default behavior; sources imported automatically |
+| `/nlm-research --no-add-sources` | ✅ Yes | Read-only parallel subagent dispatch |
 | `/nlm-add` | ❌ No | User-triggered only (writes to notebook) |
 | `/nlm-setup` | ❌ No | User-triggered only (configuration) |
 | `/nlm-migrate` | ❌ No | User-triggered only (writes globally) |
@@ -232,7 +314,7 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 | Error | Fix |
 |-------|-----|
 | `No notebooks configured` | Run `/nlm-setup` |
-| `confidence: not_found` | Run `/nlm-research --topic "..." --add-sources` |
+| `confidence: not_found` | Run `/nlm-research --topic "..."` (sources auto-imported) |
 | `Not authenticated` | Run `/nlm-setup --auth` |
 | Session expired (7+ days) | Run `/nlm-setup --reauth` |
 | Research timeout | Try `--depth fast` instead of `deep` |
@@ -248,9 +330,21 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 │   ├── invoke.sh               # Wrapper (resolves symlinks, activates venv)
 │   ├── nlm.py                  # Main CLI (6 commands)
 │   └── lib/
-│       ├── client.py           # NotebookLM API wrapper
-│       ├── registry.py         # Notebook config manager
-│       └── auth.py             # Chrome browser auth via patchright
+│       ├── client.py           # NotebookLM API wrapper (Playwright/patchright)
+│       ├── registry.py         # Config: local (.nlm/config.json) + global (~/.nlm/global.json)
+│       ├── auth.py             # Cookie-based auth via real Chrome (patchright channel="chrome")
+│       ├── auth_helper.py      # Shared auth utilities
+│       ├── answer_analyzer.py  # Confidence scoring (high/medium/low/not_found)
+│       ├── confidence_handler.py # --on-low-confidence logic (research/prompt/silent)
+│       ├── depth_decider.py    # Maps --depth fast/deep to timeouts
+│       ├── domain_router.py    # auto-scope: local-first, escalate to global on low confidence
+│       ├── notebook_registry.py # Notebook list cache (24h TTL)
+│       ├── notebook_router.py  # Routes ask queries across multiple global notebooks
+│       ├── plan_evaluator.py   # 1-5 score matrix, composite scores, research escalation
+│       ├── project_detector.py # Walk up dirs to find .nlm/config.json
+│       ├── skill_context.py    # Shared runtime context
+│       ├── source_selector.py  # Picks sources for research --add-sources
+│       └── card_writer.py      # Formats output cards
 ├── skills/                     # Canonical SKILL.md sources
 │   ├── nlm-ask/SKILL.md
 │   ├── nlm-plan/SKILL.md
