@@ -175,3 +175,85 @@ class PlanEvaluator:
                     parse_warning=True,
                 ))
         return scores
+
+    def _phase4_aggregate(
+        self, scores: list[CriterionScore], options: list[str]
+    ) -> tuple[dict[str, float | None], str]:
+        composite: dict[str, float | None] = {}
+        for option in options:
+            valid = [s.score for s in scores if s.option == option and s.score is not None]
+            composite[option] = round(sum(valid) / len(valid), 1) if valid else None
+        scored = {opt: v for opt, v in composite.items() if v is not None}
+        recommendation = max(scored, key=scored.__getitem__) if scored else options[0]
+        return composite, recommendation
+
+    def propose_criteria(self, question: str) -> list[str]:
+        """Ask NotebookLM to suggest 3-4 evaluation criteria for the question."""
+        r = self._ask(
+            f"What are 3-4 key evaluation criteria for choosing between options for: {question}"
+        )
+        lines = [
+            line.strip().lstrip("-•*0123456789. ")
+            for line in r["answer"].split("\n")
+            if line.strip()
+        ]
+        criteria = [line for line in lines if 3 < len(line) < 80][:4]
+        return criteria or ["performance", "maintainability", "cost", "complexity"]
+
+    def evaluate(self, question: str, options: list[str], criteria: list[str]) -> dict:
+        # Phase 1: collect evidence per option×criterion
+        evidences = self._phase1_collect_evidence(question, options, criteria)
+
+        # Options needing research (any criterion with low/not_found confidence)
+        low_conf_options = sorted({
+            ev.option for ev in evidences
+            if ev.confidence in ("low", "not_found")
+        })
+
+        # Phase 2: research escalation
+        research_map = self._phase2_escalate_research(question, low_conf_options)
+
+        # Options still without resolved evidence (budget exhausted)
+        gap_options: set[str] = set(low_conf_options) - set(research_map.keys())
+
+        # Phase 3: structured scoring
+        scores = self._phase3_score(evidences, research_map, gap_options)
+
+        # Phase 4: aggregation
+        composite, recommendation = self._phase4_aggregate(scores, options)
+
+        # Rationale for winning option
+        if recommendation not in gap_options:
+            r = self._ask(
+                f"In one sentence, why is '{recommendation}' the best choice for: {question}"
+            )
+            rationale = r["answer"]
+        else:
+            rationale = (
+                f"'{recommendation}' selected by default; "
+                f"evidence was insufficient for full comparison."
+            )
+
+        # Build matrix
+        matrix: dict[str, dict] = {opt: {} for opt in options}
+        for s in scores:
+            entry: dict = {"score": s.score, "reasoning": s.reasoning}
+            if s.evidence_gap:
+                entry["evidence_gap"] = True
+            if s.parse_warning:
+                entry["parse_warning"] = True
+            matrix[s.option][s.criterion] = entry
+
+        evidence_gaps = [
+            f"{s.option} / {s.criterion}" for s in scores if s.evidence_gap
+        ]
+
+        return {
+            "recommendation": recommendation,
+            "composite_scores": composite,
+            "matrix": matrix,
+            "rationale": rationale,
+            "research_used": self._research_used,
+            "max_research": self.max_research,
+            "evidence_gaps": evidence_gaps,
+        }
