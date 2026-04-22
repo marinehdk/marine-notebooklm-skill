@@ -81,43 +81,144 @@ class PlanEvaluator:
         self, question: str, options: list[str], criteria: list[str]
     ) -> list[CriterionEvidence]:
         source = "local" if self._local_nb_id else "global"
-        evidences: list[CriterionEvidence] = []
+
+        # Build single structured prompt for all option×criterion combinations
+        batch_prompt = self._build_batch_evidence_prompt(question, options, criteria)
+
+        # Make ONE API call instead of len(options) * len(criteria) calls
+        response = self._ask(batch_prompt)
+
+        # Parse response to extract evidence for each option×criterion pair
+        evidences = self._parse_batch_evidence(response["answer"], options, criteria, source)
+
+        return evidences
+
+    def _build_batch_evidence_prompt(
+        self, question: str, options: list[str], criteria: list[str]
+    ) -> str:
+        """Build a single prompt requesting evidence for all option×criterion combinations."""
+        prompt = f"Question: {question}\n\n"
+        prompt += "Provide evidence for each option-criterion combination below.\n"
+        prompt += "Output each piece of evidence with the format:\n"
+        prompt += "[OPTION]|[CRITERION]: [evidence text]\n\n"
+
+        prompt += "Evidence needed:\n"
         for option in options:
             for criterion in criteria:
-                q = f"Evidence for option '{option}' on criterion '{criterion}': {question}"
-                r = self._ask(q)
-                quality = _analyzer.assess(r["answer"])
+                prompt += f"  - {option} / {criterion}\n"
+
+        prompt += "\nProvide detailed evidence for each combination, citing your sources where applicable."
+        return prompt
+
+    def _parse_batch_evidence(
+        self, response_text: str, options: list[str], criteria: list[str], source: str
+    ) -> list[CriterionEvidence]:
+        """Parse batch response to extract evidence for each option×criterion pair."""
+        evidences: list[CriterionEvidence] = []
+
+        # Build a map of option|criterion -> evidence text from the response
+        evidence_map: dict[tuple[str, str], str] = {}
+
+        # Look for lines with pattern: [OPTION]|[CRITERION]: [evidence]
+        lines = response_text.split("\n")
+        for line in lines:
+            if "|" in line and ":" in line:
+                try:
+                    # Extract key and evidence from "[OPTION]|[CRITERION]: evidence..."
+                    key_part, evidence = line.split(":", 1)
+                    key_part = key_part.strip()
+
+                    if "|" in key_part:
+                        option, criterion = key_part.split("|", 1)
+                        option = option.strip()
+                        criterion = criterion.strip()
+                        evidence_text = evidence.strip()
+
+                        # Only include if option and criterion match expected values
+                        if option in options and criterion in criteria:
+                            evidence_map[(option, criterion)] = evidence_text
+                except (ValueError, IndexError):
+                    # Skip malformed lines
+                    pass
+
+        # Build CriterionEvidence for each option×criterion pair
+        for option in options:
+            for criterion in criteria:
+                key = (option, criterion)
+                if key in evidence_map:
+                    answer = evidence_map[key]
+                else:
+                    # Fallback: try to find relevant section in response
+                    answer = self._extract_fallback_evidence(
+                        response_text, option, criterion
+                    )
+
+                quality = _analyzer.assess(answer)
                 evidences.append(CriterionEvidence(
                     option=option,
                     criterion=criterion,
-                    answer=r["answer"],
+                    answer=answer,
                     confidence=quality.level,
                     source=source,
                 ))
+
         return evidences
 
+    def _extract_fallback_evidence(self, text: str, option: str, criterion: str) -> str:
+        """Fallback extraction when batch parsing doesn't find exact key-value pair."""
+        lines = text.split("\n")
+
+        # Look for a line mentioning both option and criterion
+        for i, line in enumerate(lines):
+            if option.lower() in line.lower() and criterion.lower() in line.lower():
+                # Collect next several lines as evidence
+                evidence_lines = [line]
+                for j in range(i + 1, min(i + 4, len(lines))):
+                    if lines[j].strip():
+                        evidence_lines.append(lines[j])
+                    else:
+                        break
+                return "\n".join(evidence_lines).strip()
+
+        # Last resort: return empty string (will be scored as "not_found")
+        return ""
+
     def _phase2_escalate_research(
-        self, question: str, options_needing_research: list[str]
+        self, question: str, evidences: list[CriterionEvidence]
     ) -> dict[str, str]:
-        """Returns {option: research_report} for enriched options."""
+        """Returns {option: research_report} for enriched options.
+
+        Selects only the top 2-3 most problematic options (by count of low/not_found
+        confidences) and uses fast-mode research only to reduce budget.
+        """
         reports: dict[str, str] = {}
         if not self._local_nb_id:
             return reports  # research API requires a local notebook
 
-        for option in options_needing_research:
+        # Score options by "neediness": count of low/not_found confidences per option
+        option_scores: dict[str, int] = {}
+        for ev in evidences:
+            if ev.confidence in ("low", "not_found"):
+                option_scores[ev.option] = option_scores.get(ev.option, 0) + 1
+
+        if not option_scores:
+            return reports  # no problematic options
+
+        # Select top 2-3 options by neediness (most low/not_found confidences)
+        top_options = sorted(
+            option_scores.items(), key=lambda x: x[1], reverse=True
+        )[:3]  # max 3 options
+        options_to_research = [opt for opt, count in top_options]
+
+        for option in options_to_research:
             if self._research_used >= self.max_research:
                 break
             topic = f"{question} — focus on option '{option}'"
 
+            # Use fast mode only (no deep escalation)
             fast_result = client.research(self._local_nb_id, topic, mode="fast")
             self._research_used += 1
             report = fast_result.get("report", "")
-            quality = _analyzer.assess(report)
-
-            if quality.level in ("low", "not_found") and self._research_used < self.max_research:
-                deep_result = client.research(self._local_nb_id, topic, mode="deep")
-                self._research_used += 1
-                report = deep_result.get("report", report)
 
             reports[option] = report
         return reports
@@ -129,6 +230,11 @@ class PlanEvaluator:
         gap_options: set[str],
     ) -> list[CriterionScore]:
         scores: list[CriterionScore] = []
+
+        # Separate gap options from scored ones
+        to_score = [ev for ev in evidences if ev.option not in gap_options]
+
+        # Handle gap options first
         for ev in evidences:
             if ev.option in gap_options:
                 scores.append(CriterionScore(
@@ -138,42 +244,86 @@ class PlanEvaluator:
                     reasoning="",
                     evidence_gap=True,
                 ))
-                continue
 
+        # If nothing to score, return early
+        if not to_score:
+            return scores
+
+        # Build single batch prompt for all option×criterion pairs
+        evidence_lines: list[str] = []
+        for ev in to_score:
             research_section = ""
             if ev.option in research_map:
                 research_section = f"\nResearch report:\n{research_map[ev.option]}"
 
-            prompt = (
-                f"Evidence gathered about '{ev.option}' on '{ev.criterion}':\n"
-                f"---\n{ev.answer}{research_section}\n---\n"
-                f"Based on the above evidence and your notebook knowledge, "
-                f"score option '{ev.option}' on criterion '{ev.criterion}' from 1 to 5 where:\n"
-                f"  1 = poor  2 = below average  3 = average  4 = good  5 = excellent\n"
-                f"Output format (exactly):\nSCORE: N\nREASONING: one sentence"
+            evidence_lines.append(
+                f"[{ev.option}|{ev.criterion}]\n{ev.answer}{research_section}"
             )
-            r = self._ask(prompt)
-            m = _SCORE_RE.search(r["answer"])
-            if m:
-                reasoning = (
-                    r["answer"].split("REASONING:", 1)[-1].strip()
-                    if "REASONING:" in r["answer"]
-                    else r["answer"][:200]
-                )
+
+        batch_prompt = (
+            "Score each evidence statement below from 1 to 5:\n"
+            "  1 = poor  2 = below average  3 = average  4 = good  5 = excellent\n\n"
+            + "\n\n---\n\n".join(evidence_lines) + "\n\n"
+            "Output one line per evidence, format: OPTION|CRITERION,SCORE,REASONING\n"
+            "Example: A|performance,4,performs well under load\n"
+            "Example: B|cost,2,expensive solution"
+        )
+
+        # Single API call for all scores
+        r = self._ask(batch_prompt)
+        response_text = r["answer"]
+
+        # Parse response: build a dict keyed by (option, criterion)
+        parsed_scores: dict[tuple[str, str], tuple[int | None, str, bool]] = {}
+        for line in response_text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # Try to parse: OPTION|CRITERION,SCORE,REASONING
+            parts = line.split(",", 2)
+            if len(parts) >= 2:
+                key_part = parts[0].strip()
+                score_part = parts[1].strip()
+                reasoning_part = parts[2].strip() if len(parts) > 2 else ""
+
+                # Extract option and criterion from "OPTION|CRITERION"
+                if "|" in key_part:
+                    opt, crit = key_part.split("|", 1)
+                    opt = opt.strip()
+                    crit = crit.strip()
+
+                    # Try to parse score
+                    score_match = _SCORE_RE.search(score_part)
+                    if score_match:
+                        score = int(score_match.group(1))
+                        parsed_scores[(opt, crit)] = (score, reasoning_part, False)
+                    else:
+                        # Score parsing failed
+                        parsed_scores[(opt, crit)] = (None, line[:200], True)
+
+        # Build final scores list in order of evidences
+        for ev in to_score:
+            key = (ev.option, ev.criterion)
+            if key in parsed_scores:
+                score, reasoning, parse_warning = parsed_scores[key]
                 scores.append(CriterionScore(
                     option=ev.option,
                     criterion=ev.criterion,
-                    score=int(m.group(1)),
+                    score=score,
                     reasoning=reasoning,
+                    parse_warning=parse_warning,
                 ))
             else:
+                # Not found in parsed response
                 scores.append(CriterionScore(
                     option=ev.option,
                     criterion=ev.criterion,
                     score=None,
-                    reasoning=r["answer"][:200],
+                    reasoning="",
                     parse_warning=True,
                 ))
+
         return scores
 
     def _phase4_aggregate(
@@ -204,17 +354,15 @@ class PlanEvaluator:
         # Phase 1: collect evidence per option×criterion
         evidences = self._phase1_collect_evidence(question, options, criteria)
 
-        # Options needing research (any criterion with low/not_found confidence)
-        low_conf_options = sorted({
-            ev.option for ev in evidences
-            if ev.confidence in ("low", "not_found")
-        })
-
-        # Phase 2: research escalation
-        research_map = self._phase2_escalate_research(question, low_conf_options)
+        # Phase 2: research escalation (selective, top 2-3 most problematic options)
+        research_map = self._phase2_escalate_research(question, evidences)
 
         # Options still without resolved evidence (budget exhausted)
-        gap_options: set[str] = set(low_conf_options) - set(research_map.keys())
+        low_conf_options = {
+            ev.option for ev in evidences
+            if ev.confidence in ("low", "not_found")
+        }
+        gap_options: set[str] = low_conf_options - set(research_map.keys())
 
         # Phase 3: structured scoring
         scores = self._phase3_score(evidences, research_map, gap_options)
