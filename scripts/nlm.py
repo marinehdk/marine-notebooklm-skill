@@ -602,6 +602,23 @@ def cmd_delete(args: list[str]) -> None:
     print(json.dumps({"status": "ok", "deleted": deleted}, indent=2, ensure_ascii=False))
 
 
+def cmd_deduplicate(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm deduplicate")
+    parser.add_argument("--project-path", default=".")
+    parsed = parser.parse_args(args)
+
+    assert_authenticated()
+    project_path = Path(parsed.project_path).expanduser().resolve()
+    cfg = load_project_config(project_path)
+    notebook_id = _resolve_local_id(cfg)
+    if not notebook_id:
+        print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+        sys.exit(1)
+
+    result = client.deduplicate_notebook_sources(notebook_id)
+    print(json.dumps({"status": "ok", **result}, indent=2, ensure_ascii=False))
+
+
 def cmd_migrate(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="nlm migrate")
     parser.add_argument("--content", required=True, help="Knowledge content to migrate")
@@ -657,6 +674,8 @@ def main() -> None:
         cmd_add(args)
     elif command == "delete":
         cmd_delete(args)
+    elif command == "deduplicate":
+        cmd_deduplicate(args)
     elif command == "migrate":
         cmd_migrate(args)
     else:
