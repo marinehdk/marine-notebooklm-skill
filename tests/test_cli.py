@@ -165,6 +165,33 @@ def test_setup_add_global_notebook():
     assert any(nb["id"] == uuid for nb in out["added"])
 
 
+def test_add_url_skips_duplicate():
+    """Adding a URL that already exists should return skipped."""
+    url = "https://en.wikipedia.org/wiki/Deduplication"
+    out1 = run(["add", "--url", url, "--project-path", PROJECT])
+    assert out1["status"] in ("ok", "skipped")
+    out2 = run(["add", "--url", url, "--project-path", PROJECT])
+    assert out2["status"] == "skipped"
+    assert out2["reason"] == "already_exists"
+    assert "source" in out2
+
+
+def test_delete_source_by_url():
+    """Add a URL then delete it by URL."""
+    url = "https://en.wikipedia.org/wiki/Source_management"
+    run(["add", "--url", url, "--project-path", PROJECT])
+    out = run(["delete", "--url", url, "--project-path", PROJECT])
+    assert out["status"] == "ok"
+    assert "deleted" in out
+    assert out["deleted"]["id"]
+
+
+def test_delete_source_not_found():
+    """Deleting a URL not in the notebook returns not_found (exit code non-zero)."""
+    url = "https://nonexistent-nlm-test-url-xyz.example.com/page"
+    out = run(["delete", "--url", url, "--project-path", PROJECT], expect_success=False)
+
+
 if __name__ == "__main__":
     tests = [
         test_setup_auth,

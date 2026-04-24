@@ -127,6 +127,11 @@ def create_notebook(title: str) -> dict[str, Any]:
 def add_url(notebook_id: str, url: str) -> dict[str, Any]:
     async def _run():
         async with await NotebookLMClient.from_storage() as client:
+            existing = await client.sources.list(notebook_id)
+            normalized = url.rstrip("/").lower()
+            for s in existing:
+                if s.url and s.url.rstrip("/").lower() == normalized:
+                    return {"skipped": True, "id": s.id, "title": s.title or url}
             source = await client.sources.add_url(notebook_id, url, wait=True)
             return {"id": source.id, "title": getattr(source, "title", url)}
     return asyncio.run(_run())
@@ -145,6 +150,14 @@ def add_note(notebook_id: str, title: str, content: str) -> dict[str, Any]:
         async with await NotebookLMClient.from_storage() as client:
             note = await client.notes.create(notebook_id, title=title, content=content)
             return {"id": note.id, "title": note.title}
+    return asyncio.run(_run())
+
+
+def delete_source(notebook_id: str, source_id: str) -> bool:
+    """Delete a source by ID. Returns True if deleted."""
+    async def _run():
+        async with await NotebookLMClient.from_storage() as client:
+            return await client.sources.delete(notebook_id, source_id)
     return asyncio.run(_run())
 
 
@@ -246,10 +259,19 @@ def import_research_sources(notebook_id: str, task_id: str, sources: list[dict])
             # Step 1: snapshot existing sources
             existing = await client.sources.list(notebook_id)
             existing_ids = {s.id for s in existing}
+            existing_urls = {s.url.rstrip("/").lower() for s in existing if s.url}
+
+            # Filter out URLs already present in the notebook
+            new_sources = [
+                s for s in sources
+                if not (s.get("url") or "").rstrip("/").lower() in existing_urls
+            ]
+            if not new_sources:
+                return []
 
             # Step 2: fire import (ignore timeout — server continues processing)
             try:
-                await client.research.import_sources(notebook_id, task_id, sources)
+                await client.research.import_sources(notebook_id, task_id, new_sources)
             except Exception:
                 pass
 
@@ -289,6 +311,38 @@ def import_research_sources(notebook_id: str, task_id: str, sources: list[dict])
                     ok.append(s)
 
             return [{"id": s.id, "title": s.title} for s in ok]
+
+    return asyncio.run(_run())
+
+
+def deduplicate_notebook_sources(notebook_id: str) -> dict[str, int]:
+    """Remove duplicate URLs from a notebook, keeping the oldest source per URL.
+
+    Returns {"removed": N, "kept": M}.
+    """
+    async def _run():
+        async with await NotebookLMClient.from_storage() as client:
+            sources = await client.sources.list(notebook_id)
+
+            # Group by normalized URL; sources without URL are kept as-is
+            seen_urls: dict[str, str] = {}  # normalized_url -> first source id
+            to_delete: list[str] = []
+            for s in sources:
+                if not s.url:
+                    continue
+                key = s.url.rstrip("/").lower()
+                if key in seen_urls:
+                    to_delete.append(s.id)
+                else:
+                    seen_urls[key] = s.id
+
+            for source_id in to_delete:
+                try:
+                    await client.sources.delete(notebook_id, source_id)
+                except Exception:
+                    pass
+
+            return {"removed": len(to_delete), "kept": len(sources) - len(to_delete)}
 
     return asyncio.run(_run())
 
