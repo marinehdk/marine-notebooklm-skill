@@ -335,22 +335,33 @@ def import_research_sources(notebook_id: str, task_id: str, sources: list[dict])
 
 
 def deduplicate_notebook_sources(notebook_id: str) -> dict[str, int]:
-    """Remove duplicate URLs from a notebook, keeping the oldest source per URL.
+    """Remove duplicate URLs and failed sources from a notebook.
 
-    Returns {"removed": N, "kept": M}.
+    Keeps the oldest source per URL; deletes all is_error sources.
+    Returns {"removed": N, "failed_removed": F, "kept": M}.
     """
     async def _run():
         async with await NotebookLMClient.from_storage() as client:
             sources = await client.sources.list(notebook_id)
 
-            # Group by normalized URL; sources without URL are kept as-is
-            seen_urls: dict[str, str] = {}  # normalized_url -> first source id
             to_delete: list[str] = []
+
+            # Delete failed sources first
+            failed_ids: set[str] = set()
             for s in sources:
-                if not s.url:
+                if getattr(s, "is_error", False):
+                    failed_ids.add(s.id)
+                    to_delete.append(s.id)
+
+            # Group non-failed sources by normalized URL; keep oldest, delete duplicates
+            seen_urls: dict[str, str] = {}  # normalized_url -> first source id
+            dup_ids: list[str] = []
+            for s in sources:
+                if s.id in failed_ids or not s.url:
                     continue
                 key = s.url.rstrip("/").lower()
                 if key in seen_urls:
+                    dup_ids.append(s.id)
                     to_delete.append(s.id)
                 else:
                     seen_urls[key] = s.id
@@ -361,7 +372,8 @@ def deduplicate_notebook_sources(notebook_id: str) -> dict[str, int]:
                 except Exception:
                     pass
 
-            return {"removed": len(to_delete), "kept": len(sources) - len(to_delete)}
+            kept = len(sources) - len(to_delete)
+            return {"removed": len(dup_ids), "failed_removed": len(failed_ids), "kept": kept}
 
     return asyncio.run(_run())
 

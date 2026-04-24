@@ -297,10 +297,14 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh deduplicate \
 
 **Output:**
 ```json
-{"status": "ok", "notebook_id": "6c20d15e-...", "removed": 3, "kept": 12}
+{"status": "ok", "notebook_id": "6c20d15e-...", "removed": 3, "failed_removed": 5, "kept": 12}
 ```
 
-Keeps the oldest source per URL; deletes the rest.
+- `removed` — duplicate URL sources deleted
+- `failed_removed` — error/failed sources deleted
+- `kept` — sources remaining after cleanup
+
+Keeps the oldest source per URL; also deletes all failed/error sources.
 
 ---
 
