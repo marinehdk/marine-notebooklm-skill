@@ -27,7 +27,7 @@ Lists your NotebookLM notebooks → select one as local → optionally add globa
 
 ---
 
-## 6 Available Skills
+## 8 Available Skills
 
 ### `/nlm-ask` — Quick knowledge query
 **When to use:** Uncertain about a concept, API usage, or architecture decision.  
@@ -219,6 +219,76 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
   --project-path "$(pwd)"
 ```
 
+**Output:**
+```json
+// URL added successfully
+{"status": "ok", "type": "url", "source": {"id": "...", "title": "..."}}
+
+// URL already exists (silently skipped — no duplicate added)
+{"status": "skipped", "reason": "already_exists", "source": {"id": "...", "title": "..."}}
+
+// Note added successfully
+{"status": "ok", "type": "note", "note": {"id": "...", "title": "..."}}
+```
+
+---
+
+### `/nlm-delete` — Delete a source from local notebook
+**When to use:** Remove a specific source by URL or source ID.  
+**Trigger:** User only. Never auto-triggered.
+
+```bash
+/nlm-delete --url "https://example.com/article"
+/nlm-delete --source-id "abc123xyz"
+```
+
+**Behind the scenes:**
+```bash
+bash ~/.claude/skills/nlm/scripts/invoke.sh delete \
+  --url "..." \
+  --project-path "$(pwd)"
+
+bash ~/.claude/skills/nlm/scripts/invoke.sh delete \
+  --source-id "..." \
+  --project-path "$(pwd)"
+```
+
+**Output:**
+```json
+// Success
+{"status": "ok", "deleted": {"id": "...", "title": "..."}}
+
+// Not found
+{"status": "not_found", "key": "https://..."}
+```
+
+URL matching is case-insensitive and ignores trailing slashes.
+
+---
+
+### `/nlm-deduplicate` — Remove duplicate sources from local notebook
+**When to use:** Manually clean up duplicate URL sources in the notebook.  
+**Trigger:** User only. Never auto-triggered.
+
+> Note: `/nlm-research` already deduplicates automatically after each import. Use this skill for one-off manual cleanup.
+
+```bash
+/nlm-deduplicate
+```
+
+**Behind the scenes:**
+```bash
+bash ~/.claude/skills/nlm/scripts/invoke.sh deduplicate \
+  --project-path "$(pwd)"
+```
+
+**Output:**
+```json
+{"status": "ok", "removed": 3, "kept": 12}
+```
+
+Keeps the oldest source per URL; deletes the rest.
+
 ---
 
 ### `/nlm-setup` — Initialize or reconfigure project
@@ -285,6 +355,8 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 | `/nlm-research` (default: `--add-sources`) | ✅ Yes | Default behavior; sources imported automatically |
 | `/nlm-research --no-add-sources` | ✅ Yes | Read-only parallel subagent dispatch |
 | `/nlm-add` | ❌ No | User-triggered only (writes to notebook) |
+| `/nlm-delete` | ❌ No | User-triggered only (deletes from notebook) |
+| `/nlm-deduplicate` | ❌ No | User-triggered only (manual cleanup) |
 | `/nlm-setup` | ❌ No | User-triggered only (configuration) |
 | `/nlm-migrate` | ❌ No | User-triggered only (writes globally) |
 
@@ -328,7 +400,7 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 ├── README.md                   # This file
 ├── scripts/
 │   ├── invoke.sh               # Wrapper (resolves symlinks, activates venv)
-│   ├── nlm.py                  # Main CLI (6 commands)
+│   ├── nlm.py                  # Main CLI (8 commands)
 │   └── lib/
 │       ├── client.py           # NotebookLM API wrapper (Playwright/patchright)
 │       ├── registry.py         # Config: local (.nlm/config.json) + global (~/.nlm/global.json)
@@ -350,6 +422,8 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 │   ├── nlm-plan/SKILL.md
 │   ├── nlm-research/SKILL.md
 │   ├── nlm-add/SKILL.md
+│   ├── nlm-delete/SKILL.md
+│   ├── nlm-deduplicate/SKILL.md
 │   ├── nlm-setup/SKILL.md
 │   └── nlm-migrate/SKILL.md
 └── .venv/
@@ -359,6 +433,8 @@ bash ~/.claude/skills/nlm/scripts/invoke.sh add \
 ├── nlm-plan/SKILL.md
 ├── nlm-research/SKILL.md
 ├── nlm-add/SKILL.md
+├── nlm-delete/SKILL.md
+├── nlm-deduplicate/SKILL.md
 ├── nlm-setup/SKILL.md
 └── nlm-migrate/SKILL.md
 
