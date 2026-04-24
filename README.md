@@ -266,25 +266,38 @@ URL matching is case-insensitive and ignores trailing slashes.
 
 ---
 
-### `/nlm-deduplicate` — Remove duplicate sources from local notebook
-**When to use:** Manually clean up duplicate URL sources in the notebook.  
+### `/nlm-deduplicate` — Remove duplicate sources from a notebook
+**When to use:** Manually clean up duplicate URL sources in any notebook.  
 **Trigger:** User only. Never auto-triggered.
 
 > Note: `/nlm-research` already deduplicates automatically after each import. Use this skill for one-off manual cleanup.
 
 ```bash
 /nlm-deduplicate
+/nlm-deduplicate --notebook-id "6c20d15e-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
 **Behind the scenes:**
 ```bash
+# Current project's notebook
 bash ~/.claude/skills/nlm/scripts/invoke.sh deduplicate \
   --project-path "$(pwd)"
+
+# Any notebook by ID (no project config needed)
+bash ~/.claude/skills/nlm/scripts/invoke.sh deduplicate \
+  --notebook-id "6c20d15e-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
+
+**Parameters:**
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `--notebook-id` | UUID | — | Target notebook directly (overrides `--project-path`) |
+| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
 
 **Output:**
 ```json
-{"status": "ok", "removed": 3, "kept": 12}
+{"status": "ok", "notebook_id": "6c20d15e-...", "removed": 3, "kept": 12}
 ```
 
 Keeps the oldest source per URL; deletes the rest.
