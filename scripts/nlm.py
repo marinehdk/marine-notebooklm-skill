@@ -11,7 +11,6 @@ Usage:
 """
 
 import argparse
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -29,7 +28,6 @@ from lib.registry import (
 from lib.notebook_router import route_notebooks
 from lib.confidence_handler import handle_confidence
 from lib import client
-from notebooklm import NotebookLMClient
 
 
 def _do_browser_auth(force: bool = False) -> bool:
@@ -578,23 +576,11 @@ def cmd_delete(args: list[str]) -> None:
         print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
         sys.exit(1)
 
-    async def _find_and_delete():
-        async with await NotebookLMClient.from_storage() as c:
-            sources = await c.sources.list(notebook_id)
-            if parsed.source_id:
-                match = next((s for s in sources if s.id == parsed.source_id), None)
-            else:
-                normalized = parsed.url.rstrip("/").lower()
-                match = next(
-                    (s for s in sources if s.url and s.url.rstrip("/").lower() == normalized),
-                    None,
-                )
-            if not match:
-                return None
-            await c.sources.delete(notebook_id, match.id)
-            return {"id": match.id, "title": match.title}
-
-    deleted = asyncio.run(_find_and_delete())
+    deleted = client.delete_source(
+        notebook_id,
+        source_id=parsed.source_id,
+        url=parsed.url,
+    )
     if deleted is None:
         key = parsed.url or parsed.source_id
         print(json.dumps({"status": "not_found", "key": key}))

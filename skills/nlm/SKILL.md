@@ -83,6 +83,23 @@ $INVOKE setup --project-path "." --create "Project Research Notes"
 
 Run once per project. Config saved to `.nlm/config.json`.
 
+## delete — Remove a source from local notebook
+
+```bash
+$INVOKE delete --url "https://example.com/article" --project-path "."
+$INVOKE delete --source-id "<id>" --project-path "."
+```
+
+**User-triggered only.** Never auto-invoke.
+
+## deduplicate — Remove duplicate URL sources
+
+```bash
+$INVOKE deduplicate --project-path "."
+```
+
+**User-triggered only.** Removes duplicate URL sources from the local notebook, keeping the oldest per URL.
+
 ## migrate — Promote knowledge to global notebook
 
 ```bash

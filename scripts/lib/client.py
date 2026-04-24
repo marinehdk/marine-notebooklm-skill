@@ -153,11 +153,30 @@ def add_note(notebook_id: str, title: str, content: str) -> dict[str, Any]:
     return asyncio.run(_run())
 
 
-def delete_source(notebook_id: str, source_id: str) -> bool:
-    """Delete a source by ID. Returns True if deleted."""
+def delete_source(
+    notebook_id: str,
+    *,
+    source_id: str | None = None,
+    url: str | None = None,
+) -> dict[str, Any] | None:
+    """Find and delete a source by ID or URL. Returns {"id": ..., "title": ...} or None if not found."""
     async def _run():
         async with await NotebookLMClient.from_storage() as client:
-            return await client.sources.delete(notebook_id, source_id)
+            sources = await client.sources.list(notebook_id)
+            if source_id:
+                match = next((s for s in sources if s.id == source_id), None)
+            elif url:
+                normalized = url.rstrip("/").lower()
+                match = next(
+                    (s for s in sources if s.url and s.url.rstrip("/").lower() == normalized),
+                    None,
+                )
+            else:
+                return None
+            if not match:
+                return None
+            await client.sources.delete(notebook_id, match.id)
+            return {"id": match.id, "title": match.title}
     return asyncio.run(_run())
 
 

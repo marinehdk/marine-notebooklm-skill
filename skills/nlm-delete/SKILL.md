@@ -25,10 +25,10 @@ Provide either `--url` or `--source-id`. If neither is given, ask the user which
 INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 
 # Delete by URL
-$INVOKE delete --url "https://example.com/article"
+$INVOKE delete --url "https://example.com/article" --project-path "."
 
 # Delete by source ID
-$INVOKE delete --source-id "abc123xyz"
+$INVOKE delete --source-id "abc123xyz" --project-path "."
 ```
 
 ## Output
