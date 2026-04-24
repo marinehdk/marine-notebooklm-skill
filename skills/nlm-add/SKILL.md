@@ -31,3 +31,18 @@ $INVOKE add --url "<URL>"
 # Add a text note
 $INVOKE add --note "<content>" --title "<title>"
 ```
+
+## Output
+
+```json
+// URL added successfully
+{"status": "ok", "type": "url", "source": {"id": "...", "title": "..."}}
+
+// URL already exists in notebook (silently skipped)
+{"status": "skipped", "reason": "already_exists", "source": {"id": "...", "title": "..."}}
+
+// Note added successfully
+{"status": "ok", "type": "note", "note": {"id": "...", "title": "..."}}
+```
+
+If `status` is `skipped`, inform the user the URL is already in the notebook — no action needed.
