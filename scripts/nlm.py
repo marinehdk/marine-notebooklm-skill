@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from lib.registry import (
 from lib.notebook_router import route_notebooks
 from lib.confidence_handler import handle_confidence
 from lib import client
+from notebooklm import NotebookLMClient
 
 
 def _do_browser_auth(force: bool = False) -> bool:
@@ -557,6 +559,49 @@ def cmd_add(args: list[str]) -> None:
         print(json.dumps({"status": "ok", "type": "note", "note": result}, indent=2, ensure_ascii=False))
 
 
+def cmd_delete(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm delete")
+    parser.add_argument("--url", help="Delete source matching this URL")
+    parser.add_argument("--source-id", help="Delete source with this ID")
+    parser.add_argument("--project-path", default=".")
+    parsed = parser.parse_args(args)
+
+    if not parsed.url and not parsed.source_id:
+        print(json.dumps({"error": "Provide --url or --source-id"}))
+        sys.exit(1)
+
+    assert_authenticated()
+    project_path = Path(parsed.project_path).expanduser().resolve()
+    cfg = load_project_config(project_path)
+    notebook_id = _resolve_local_id(cfg)
+    if not notebook_id:
+        print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+        sys.exit(1)
+
+    async def _find_and_delete():
+        async with await NotebookLMClient.from_storage() as c:
+            sources = await c.sources.list(notebook_id)
+            if parsed.source_id:
+                match = next((s for s in sources if s.id == parsed.source_id), None)
+            else:
+                normalized = parsed.url.rstrip("/").lower()
+                match = next(
+                    (s for s in sources if s.url and s.url.rstrip("/").lower() == normalized),
+                    None,
+                )
+            if not match:
+                return None
+            await c.sources.delete(notebook_id, match.id)
+            return {"id": match.id, "title": match.title}
+
+    deleted = asyncio.run(_find_and_delete())
+    if deleted is None:
+        key = parsed.url or parsed.source_id
+        print(json.dumps({"status": "not_found", "key": key}))
+        sys.exit(1)
+    print(json.dumps({"status": "ok", "deleted": deleted}, indent=2, ensure_ascii=False))
+
+
 def cmd_migrate(args: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="nlm migrate")
     parser.add_argument("--content", required=True, help="Knowledge content to migrate")
@@ -610,6 +655,8 @@ def main() -> None:
         cmd_research(args)
     elif command == "add":
         cmd_add(args)
+    elif command == "delete":
+        cmd_delete(args)
     elif command == "migrate":
         cmd_migrate(args)
     else:
