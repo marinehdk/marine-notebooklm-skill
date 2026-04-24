@@ -468,7 +468,7 @@ def cmd_research(args: list[str]) -> None:
 
     from lib.progress import step, done, warn
 
-    total = 3 if parsed.add_sources else 2
+    total = 4 if parsed.add_sources else 2
     timeout_label = "60s" if parsed.depth == "fast" else "180s"
 
     step(1, total, f"Starting {parsed.depth} research (timeout: {timeout_label}): {parsed.topic[:60]}...")
@@ -487,6 +487,7 @@ def cmd_research(args: list[str]) -> None:
     done(1, total, f"Research complete — {len(result.get('sources', []))} sources found")
 
     sources_imported = []
+    duplicates_removed = 0
     if parsed.add_sources and result.get("task_id") and result.get("sources"):
         step(2, total, f"Importing {len(result['sources'])} sources into notebook...")
         try:
@@ -498,12 +499,24 @@ def cmd_research(args: list[str]) -> None:
             warn(f"Source import failed ({type(e).__name__}) — research results still shown below")
             sources_imported = []
 
+        step(3, total, "Deduplicating notebook sources...")
+        try:
+            dedup = client.deduplicate_notebook_sources(notebook_id)
+            duplicates_removed = dedup.get("removed", 0)
+            msg = f"Deduplication complete — {dedup['kept']} sources kept"
+            if duplicates_removed:
+                msg += f", {duplicates_removed} duplicates removed"
+            done(3, total, msg)
+        except Exception as e:
+            warn(f"Deduplication failed ({type(e).__name__}) — skipped")
+
     print(json.dumps({
         "status": "ok",
         "topic": parsed.topic,
         "report": result.get("report", ""),
         "sources": result.get("sources", []),
         "sources_imported": len(sources_imported),
+        "duplicates_removed": duplicates_removed,
         "add_sources": parsed.add_sources,
     }, indent=2, ensure_ascii=False))
 
@@ -531,7 +544,14 @@ def cmd_add(args: list[str]) -> None:
 
     if parsed.url:
         result = client.add_url(notebook_id, parsed.url)
-        print(json.dumps({"status": "ok", "type": "url", "source": result}, indent=2, ensure_ascii=False))
+        if result.get("skipped"):
+            print(json.dumps({
+                "status": "skipped",
+                "reason": "already_exists",
+                "source": {"id": result["id"], "title": result["title"]},
+            }, indent=2, ensure_ascii=False))
+        else:
+            print(json.dumps({"status": "ok", "type": "url", "source": result}, indent=2, ensure_ascii=False))
     else:
         result = client.add_note(notebook_id, title=parsed.title, content=parsed.note)
         print(json.dumps({"status": "ok", "type": "note", "note": result}, indent=2, ensure_ascii=False))
