@@ -1,10 +1,10 @@
 ---
 name: nlm-setup
 description: >
-  初始化项目的 NotebookLM 配置：绑定本地笔记本和全局参考笔记本。
-  当用户说"初始化 NotebookLM"、"配置笔记本"、"绑定 notebook"、
+  初始化和管理项目的 NotebookLM 配置：绑定本地、域、综合和全局笔记本。
+  当用户说"初始化 NotebookLM"、"配置笔记本"、"绑定 notebook"、"创建域笔记本"、
   "setup nlm"、"这个项目用哪个笔记本"时触发。
-  Do NOT use for: querying notebooks (use nlm-ask), authentication (use nlm setup --auth).
+  Do NOT use for: querying notebooks (use nlm-ask), authentication only (use nlm setup --auth).
 allowed-tools:
   - Bash
 ---
@@ -12,72 +12,135 @@ allowed-tools:
 # nlm-setup — 项目笔记本配置
 
 ```bash
-INVOKE="$HOME/.claude/skills/nlm/scripts/invoke.sh"
+INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
 ```
 
 ## 命令速查
 
+### 认证
 | 命令 | 作用 |
 |------|------|
-| `bash $INVOKE setup` | 查看当前配置（零 API） |
-| `bash $INVOKE setup --status` | 显式查询本地/全局笔记本绑定状态（零 API） |
-| `bash $INVOKE setup --auth` | 首次 Google 认证 |
-| `bash $INVOKE setup --reauth` | 重新认证 |
-| `bash $INVOKE setup --notebook-list` | 列出账号下所有笔记本（24h 缓存） |
-| `bash $INVOKE setup --notebook-list --refresh` | 强制从 API 重新拉取列表 |
-| `bash $INVOKE setup --add-local-notebook <UUID>` | 绑定为项目本地笔记本（唯一） |
-| `bash $INVOKE setup --add-global-notebook <UUID> [UUID2...]` | 追加全局参考笔记本（可多个） |
-| `bash $INVOKE setup --create-local <title>` | 新建笔记本并绑定为 local |
-| `bash $INVOKE setup --create-global <title>` | 新建笔记本并追加为 global |
+| `$INVOKE setup --auth` | 首次 Google 认证 |
+| `$INVOKE setup --reauth` | 重新认证 |
 
-## 标准初始化流程（三步）
+### 状态与列表
+| 命令 | 作用 |
+|------|------|
+| `$INVOKE setup` | 查看当前完整配置（零 API），含域笔记本和综合笔记本 |
+| `$INVOKE setup --status` | 显式查询当前绑定状态（零 API） |
+| `$INVOKE setup --notebook-list` | 列出账号下所有笔记本（24h 缓存） |
+| `$INVOKE setup --notebook-list --refresh` | 强制从 API 重新拉取列表 |
+
+### 绑定现有笔记本
+| 命令 | 作用 |
+|------|------|
+| `$INVOKE setup --add-local-notebook <UUID>` | 绑定为项目本地笔记本（PROJ 层） |
+| `$INVOKE setup --add-global-notebook <UUID> [UUID2...]` | 追加全局参考笔记本（GLOBAL 层） |
+
+### 创建新笔记本
+| 命令 | 作用 |
+|------|------|
+| `$INVOKE setup --create-local "<PROJ · Name · Local>"` | 新建项目本地笔记本 |
+| `$INVOKE setup --create-global "<GLOBAL · Name · Reference>"` | 新建全局参考笔记本 |
+| `$INVOKE setup --create-domain "<DOMAIN · Name · Research>" --domain-key <key> --domain-keywords "kw1,kw2"` | 新建域笔记本（DOMAIN 层） |
+| `$INVOKE setup --create-synthesis "<META · Name · Synthesis>"` | 新建综合笔记本（META 层） |
+
+## 笔记本命名规范
+
+**格式：`{SCOPE} · {Name} · {Type}`**
+
+| SCOPE | 用途 | Type |
+|-------|------|------|
+| `PROJ` | 当前项目特有知识 | `Local` |
+| `DOMAIN` | 单一技术领域深挖，可跨项目共享 | `Research` |
+| `META` | 跨域综合，来源为蒸馏文档 | `Synthesis` |
+| `GLOBAL` | 全局通用参考，长期维护 | `Reference` |
+
+示例：
+- `PROJ · MASS-L3 · Local`
+- `DOMAIN · Navigation Algorithms · Research`
+- `META · ASV Research · Synthesis`
+- `GLOBAL · Maritime Engineering · Reference`
+
+## 创建域笔记本（--create-domain）
+
+```bash
+$INVOKE setup \
+  --create-domain "DOMAIN · Navigation Algorithms · Research" \
+  --domain-key navigation_algorithms \
+  --domain-keywords "path planning,collision avoidance,COLREGS,LiDAR,SLAM" \
+  --domain-description "路径规划、避碰、COLREGS、感知融合、控制律"
+```
+
+**参数说明：**
+- `--domain-key`: snake_case 唯一键，用于路由（如 `navigation_algorithms`）
+- `--domain-keywords`: 逗号分隔关键词，驱动自动路由（keyword matching）
+- `--domain-description`: 可选，便于理解用途
+
+域笔记本创建后，`/nlm-research --target auto` 会自动将匹配话题的来源路由至该域。
+
+## 创建综合笔记本（--create-synthesis）
+
+```bash
+$INVOKE setup --create-synthesis "META · ASV Research · Synthesis"
+```
+
+综合笔记本（META 层）用于跨域综合查询。其来源来自各域笔记本的 Briefing Doc 蒸馏文档，而非原始研究来源。
+
+## 标准初始化流程
 
 ### Step 1 — 展示笔记本列表
 
 ```bash
-bash $INVOKE setup --notebook-list
+$INVOKE setup --notebook-list
 ```
 
-将输出中的 `table` 以 Markdown 格式展示给用户，**必须包含所有列：`#`、`UUID`、`Title`、`Sources`、`Created`**。示例格式：
-
-| # | UUID | Title | Sources | Created |
-|---|------|-------|---------|---------|
-| 1 | 8b3c7934-... | Claude Code实战 | 0 | 2026-04-19 |
-
-读取 `next_step.hint` 后询问：
-> "请选择一个作为本项目的**本地笔记本**（输入序号 # 或 UUID），或告诉我新建一个。"
+以 Markdown 表格展示 `table`（必须包含 `#`、`UUID`、`Title`、`Sources`、`Created`）。
 
 ### Step 2 — 绑定本地笔记本
 
-用户选择已有笔记本（接受 #序号、UUID、名称任一形式）：
-- 从 table 查到对应 UUID
-- 执行 `bash $INVOKE setup --add-local-notebook <UUID>`
-
-用户希望新建：
-- 询问："请告诉我新笔记本的名称"
-- 执行 `bash $INVOKE setup --create-local "<title>"`
-
-绑定成功后，读取 `next_step.hint`，询问：
-> "是否需要添加**全局参考笔记本**？可选择一个或多个（输入序号或 UUID，空格分隔）。"
-
-### Step 3 — 绑定全局参考笔记本（可选）
-
-用户选择添加：
-- 从 table 查到对应 UUID 列表
-- 执行 `bash $INVOKE setup --add-global-notebook <UUID1> <UUID2> ...`
-
-用户跳过：
-- 告知："Setup 完成，可以使用 `nlm ask` 开始提问了。"
-
-可随时追加：用户可再次运行 `--add-global-notebook` 添加更多全局参考本。
-
-## 查看当前状态
-
+用户选择或新建：
 ```bash
-bash $INVOKE setup
+$INVOKE setup --add-local-notebook <UUID>
+# 或
+$INVOKE setup --create-local "PROJ · <项目名> · Local"
 ```
 
-直接读本地 config，不调用 API，即时展示当前绑定情况。
+### Step 3 — 绑定域笔记本（可选，按需创建）
+
+```bash
+$INVOKE setup --create-domain "DOMAIN · <领域名> · Research" \
+  --domain-key <key> --domain-keywords "kw1,kw2,kw3"
+```
+
+### Step 4 — 绑定综合笔记本（可选，当跨域研究积累到一定程度时）
+
+```bash
+$INVOKE setup --create-synthesis "META · <项目名> · Synthesis"
+```
+
+### Step 5 — 绑定全局参考笔记本（可选）
+
+```bash
+$INVOKE setup --add-global-notebook <UUID>
+```
+
+## 状态输出示例
+
+`$INVOKE setup` 返回：
+```json
+{
+  "local_notebook": {"id": "...", "title": "PROJ · MASS-L3 · Local"},
+  "global_notebooks": [...],
+  "synthesis_notebook": {"id": "...", "name": "META · ASV Research · Synthesis"},
+  "domain_notebooks": {
+    "navigation_algorithms": {
+      "id": "...", "name": "DOMAIN · Navigation Algorithms · Research",
+      "keywords": ["path planning", "COLREGS"], "source_count": 45
+    }
+  }
+}
+```
 
 ## 缓存说明
 
@@ -89,7 +152,8 @@ bash $INVOKE setup
 
 | 错误 | 处理方式 |
 |------|---------|
-| `"authenticated: false"` | 告知用户先运行 `bash $INVOKE setup --auth` |
-| `"error": "cache_missing"` | 提示先运行 `--notebook-list` 生成缓存 |
-| `"error": "uuid_not_found"` | UUID 不在缓存中，建议 `--refresh` 后重试 |
-| `"error": "local_already_bound"` | 已有本地笔记本，询问用户是否确认覆盖 |
+| `"authenticated: false"` | 先运行 `$INVOKE setup --auth` |
+| `"error": "cache_missing"` | 先运行 `--notebook-list` 生成缓存 |
+| `--domain-key required` | 创建域笔记本时必须提供 `--domain-key` 和 `--domain-keywords` |
+| `"Domain already exists"` | 该域已配置，无需重复创建 |
+| `"Synthesis notebook already configured"` | 综合笔记本已存在 |

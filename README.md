@@ -1,6 +1,6 @@
 # nlm — NotebookLM Skill for Claude Code
 
-Query your curated NotebookLM notebooks for grounded knowledge during coding, without breaking your flow.
+Query your curated NotebookLM notebooks for grounded knowledge during coding, without breaking your flow. Supports a three-tier multi-notebook architecture for large-scale research projects.
 
 ## Quick Start
 
@@ -8,393 +8,277 @@ Query your curated NotebookLM notebooks for grounded knowledge during coding, wi
 ```bash
 /nlm-setup --auth
 ```
-Opens your **real Chrome browser** at `notebooklm.google.com`. If you're already logged into Google in Chrome, no password needed — just wait for the page to load and authentication is saved automatically.
-
-Session is stored at `~/.notebooklm/storage_state.json` and reused silently on all future calls.
+Opens your **real Chrome browser** at `notebooklm.google.com`. Session saved to `~/.notebooklm/storage_state.json`.
 
 ### 2. Initialize your project (once per project)
 ```bash
 /nlm-setup
 ```
-Lists your NotebookLM notebooks → select one as local → optionally add global reference notebooks → saves config to `<project>/.nlm/config.json`.
+Lists your NotebookLM notebooks → select one → saves config to `<project>/.nlm/config.json`.
 
-### 3. Start querying
+### 3. Start querying and researching
 ```bash
-/nlm-ask What is the main pattern used in this codebase?
-/nlm-plan Should we use Redis or in-memory cache?
-/nlm-research Deep dive on async/await patterns
+/nlm-ask What navigation algorithm does the notebook recommend?
+/nlm-research COLREGS collision avoidance for ASV
+/nlm-plan Should we use A* or RRT for path planning?
 ```
 
 ---
 
-## 8 Available Skills
+## Three-Tier Architecture
 
-### `/nlm-ask` — Quick knowledge query
-**When to use:** Uncertain about a concept, API usage, or architecture decision.  
-**Auto-trigger:** Yes — when Claude encounters knowledge gaps during coding.
+For large research projects where a single 300-source notebook isn't enough.
 
-```bash
-/nlm-ask What does the notebook say about error handling patterns?
-/nlm-ask How should I implement caching here?
+```
+L3  GLOBAL · {Domain} · Reference       (cross-project universal knowledge)
+         ↑ distillation
+L2  META · {Project} · Synthesis         (cross-domain synthesis)
+         ↑ distillation
+L1  DOMAIN · {Topic} · Research          (single-domain deep research, 300 sources each)
+    PROJ · {Project} · Local             (project-specific notes)
 ```
 
-**Behind the scenes:**
+### Notebook Naming Convention
+
+**Format: `{SCOPE} · {Name} · {Type}`**
+
+| SCOPE | Purpose | Type |
+|-------|---------|------|
+| `PROJ` | Project-specific knowledge | `Local` |
+| `DOMAIN` | Single-domain deep research | `Research` |
+| `META` | Cross-domain synthesis (sources = Briefing Docs) | `Synthesis` |
+| `GLOBAL` | Universal long-term reference | `Reference` |
+
+Examples:
+- `PROJ · MASS-L3 · Local`
+- `DOMAIN · Navigation Algorithms · Research`
+- `META · ASV Research · Synthesis`
+- `GLOBAL · Maritime Engineering · Reference`
+
+---
+
+## Available Skills
+
+### `/nlm-ask` — Query notebooks for grounded answers
+
+**Triggered by:** Main session Claude or background Agent.  
+**Writes:** Nothing — always read-only.
+
 ```bash
-bash ~/.claude/skills/nlm/scripts/invoke.sh ask \
-  --question "..." \
-  --project-path "$(pwd)" \
-  --scope auto \
-  --on-low-confidence research \
-  --format json
+/nlm-ask What does the notebook say about COLREGS Rule 8?
+/nlm-ask How should I implement collision avoidance here?
 ```
 
-**Parameters:**
+**`--scope` routing:**
 
-| Parameter | Values | Default | Description |
-|-----------|--------|---------|-------------|
-| `--question` | text | required | The question to ask |
-| `--scope` | `auto\|local\|global` | `auto` | `auto` = local first, then fallback to global |
-| `--on-low-confidence` | `prompt\|research\|silent` | `research` | `research` = auto fast-research + import + retry; `prompt` = attach hint only; `silent` = return as-is |
-| `--format` | `json\|text` | `json` | Output format |
-| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
+| Scope | Behavior |
+|-------|----------|
+| `auto` | Classify question → domain → local → global → synthesis |
+| `local` | Project local notebook only |
+| `global` | Route among global notebooks (Haiku-ranked) |
+| `synthesis` | META synthesis notebook |
+| `domain:<key>` | Specific domain notebook (e.g. `domain:navigation_algorithms`) |
 
 **Output:**
 ```json
 {
   "answer": "...",
   "confidence": "high|medium|low|not_found",
-  "source_notebook": "local|global",
-  "source_notebook_id": "6c20d15e-...",
-  "source_notebook_title": "My Project Notebook",
-  "citations": [{"citation_number": 1, "text": "..."}],
-  "auto_researched": true,
-  "next_action": {
-    "type": "suggest_research",
-    "message": "...",
-    "command": "nlm research --topic \"...\" --add-sources --project-path \".\""
-  }
+  "answered_by": ["domain:navigation_algorithms", "local"],
+  "citations": [...],
+  "suggest_research": false
 }
 ```
 
-`auto_researched` is present when `--on-low-confidence research` triggered an automatic research + import cycle.  
-`next_action` is only present when confidence is `low`/`not_found` and auto-research was attempted but still insufficient.
+When `suggest_research: true`, run `/nlm-research` on the topic first, then re-ask.
 
-**Handling results:**
+---
 
-| confidence | `auto_researched` | `next_action` present? | Action |
-|------------|-------------------|------------------------|--------|
-| `high` / `medium` | — | No | Use answer directly |
-| any | `true` | No | Sources auto-imported; answer reflects new content — use directly |
-| `low` / `not_found` | — | Yes (`suggest_research`) | Auto-research ran but still low confidence; tell user, offer manual follow-up |
+### `/nlm-research` — Research + knowledge accumulation
 
-**Scope modes:**
-- `auto` (default) — Local notebook first; falls back to global on low/not_found
-- `local` — Project notebook only
-- `global` — Global domain notebooks only
+**Triggered by:** Main session Claude or background Agent.  
+**Writes:** Sources into the correct notebook (determined by `--target auto`).
+
+```bash
+# Research + auto-route sources to matching domain notebook
+/nlm-research COLREGS collision avoidance maritime autonomous vessel
+
+# Read-only research (no source import — for subagent dispatch)
+/nlm-research --no-add-sources underwater acoustic communication
+
+# Explicit domain routing
+/nlm-research --target domain:navigation_algorithms path planning RRT*
+```
+
+**`--target` routing:**
+
+| Target | Behavior |
+|--------|----------|
+| `auto` | Classify topic → domain notebook; no match → local; new domain → advisory only |
+| `local` | Project local notebook |
+| `synthesis` | META synthesis notebook |
+| `domain:<key>` | Specific domain notebook |
+
+**Auto-routing flow:**
+```
+Topic classified → domain matched → import to domain notebook
+                 → no domain match (low score) → import to local
+                 → new domain suggested → import to local + output domain_suggestion
+```
+
+**Output includes new routing fields:**
+```json
+{
+  "target_notebook": "domain:navigation_algorithms",
+  "sources_imported": 8,
+  "notebook_source_count": 53,
+  "domain_suggestion": null,
+  "merge_suggestions": [],
+  "split_suggestions": []
+}
+```
+
+When `domain_suggestion` is present, run `/nlm-setup --create-domain` to register the new domain.
+
+---
+
+### `/nlm-setup` — Configure notebooks
+
+**Trigger:** User only.
+
+```bash
+# View full configuration (all tiers)
+/nlm-setup
+
+# Authenticate
+/nlm-setup --auth
+/nlm-setup --reauth
+
+# List and bind notebooks
+/nlm-setup --notebook-list
+/nlm-setup --add-local-notebook <UUID>
+/nlm-setup --create-local "PROJ · My Project · Local"
+
+# Create domain notebook (L1 DOMAIN tier)
+/nlm-setup \
+  --create-domain "DOMAIN · Navigation Algorithms · Research" \
+  --domain-key navigation_algorithms \
+  --domain-keywords "path planning,collision avoidance,COLREGS,LiDAR,SLAM"
+
+# Create synthesis notebook (L2 META tier)
+/nlm-setup --create-synthesis "META · ASV Research · Synthesis"
+
+# Add global reference notebook (L3 GLOBAL tier)
+/nlm-setup --add-global-notebook <UUID>
+```
 
 ---
 
 ### `/nlm-plan` — Evidence-based option comparison
-**When to use:** Evaluating 2+ technical options ("should we use X or Y?").  
-**Auto-trigger:** Yes — when user compares options.
 
 ```bash
-/nlm-plan Should we refactor with Strategy or Decorator pattern?
-/nlm-plan Monolith vs microservices for this use case?
-```
-
-**Behind the scenes:**
-```bash
-bash ~/.claude/skills/nlm/scripts/invoke.sh plan \
-  --question "..." \
-  --options "Option A,Option B" \
-  --criteria "performance,maintainability" \
-  --max-research 3 \
-  --project-path "$(pwd)"
-```
-
-**Parameters:**
-
-| Parameter | Values | Default | Description |
-|-----------|--------|---------|-------------|
-| `--question` | text | required | The decision being evaluated |
-| `--options` | `"A,B,C"` | required | Comma-separated options to compare |
-| `--criteria` | `"x,y,z"` | optional | Evaluation criteria (auto-proposed if omitted) |
-| `--max-research` | integer | `3` | Max research calls allowed |
-| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
-
-**Output:**
-```json
-{
-  "recommendation": "Option A",
-  "composite_scores": {"Option A": 4.2, "Option B": 3.0},
-  "matrix": {
-    "Option A": {
-      "performance": {"score": 5, "reasoning": "..."},
-      "cost": {"score": 3, "reasoning": "...", "evidence_gap": true}
-    },
-    "Option B": {
-      "performance": {"score": 3, "reasoning": "..."},
-      "cost": {"score": 2, "reasoning": "..."}
-    }
-  },
-  "rationale": "Option A scored highest overall (4.2 vs 3.0)...",
-  "research_used": 2,
-  "max_research": 3,
-  "evidence_gaps": ["Option B / cost"]
-}
-```
-
-**Score scale:**
-
-| Score | Meaning |
-|-------|---------|
-| 5 | Excellent |
-| 4 | Good |
-| 3 | Average |
-| 2 | Below average |
-| 1 | Poor |
-
-**Research escalation:** When notebook evidence is low confidence for an option, `nlm-plan` automatically runs research (fast → deep if still insufficient). `research_used` shows calls made; `evidence_gaps` lists option/criterion pairs uncovered within `--max-research`.
-
-**Field reference:**
-
-| Field | Always present | Description |
-|-------|---------------|-------------|
-| `recommendation` | ✅ | Option with highest composite score |
-| `composite_scores` | ✅ | Per-option mean of valid scores (1 decimal) |
-| `matrix` | ✅ | Per-option, per-criterion scores and reasoning |
-| `rationale` | ✅ | One-sentence justification for recommendation |
-| `research_used` | ✅ | Number of research calls made |
-| `max_research` | ✅ | The `--max-research` cap used |
-| `evidence_gaps` | ✅ | List of `"option / criterion"` pairs with no evidence |
-| `evidence_gap` | On matrix entry | Research cap exhausted before covering this pair |
-| `parse_warning` | On matrix entry | Score format not parseable; score=null |
-
----
-
-### `/nlm-research` — Deep research with automatic source import
-**When to use:** Investigate a topic and add found sources to your notebook.  
-**Auto-trigger:** Yes (default `--add-sources`). Use `--no-add-sources` only for read-only lookups.
-
-```bash
-/nlm-research Redis caching patterns
-/nlm-research --topic "Kubernetes networking" --depth deep
-```
-
-**Behind the scenes:**
-```bash
-bash ~/.claude/skills/nlm/scripts/invoke.sh research \
-  --topic "..." \
-  --depth fast|deep \
-  --add-sources \
-  --project-path "$(pwd)"
-```
-
-**Parameters:**
-- `--depth fast` — 60s timeout
-- `--depth deep` — 180s timeout
-- `--add-sources` (default) — Import found URLs into local notebook automatically
-- `--no-add-sources` — Return report only, no writes
-
----
-
-### `/nlm-add` — Add knowledge to local notebook
-**When to use:** Save a useful URL or text insight to your project notebook.  
-**Trigger:** User only. Never auto-triggered.
-
-```bash
-/nlm-add --url "https://example.com/article"
-/nlm-add --note "Key insight: Always validate at system boundaries" --title "Input Validation"
-```
-
-**Behind the scenes:**
-```bash
-bash ~/.claude/skills/nlm/scripts/invoke.sh add \
-  --url "..." \
-  --project-path "$(pwd)"
-
-bash ~/.claude/skills/nlm/scripts/invoke.sh add \
-  --note "..." --title "..." \
-  --project-path "$(pwd)"
-```
-
-**Output:**
-```json
-// URL added successfully
-{"status": "ok", "type": "url", "source": {"id": "...", "title": "..."}}
-
-// URL already exists (silently skipped — no duplicate added)
-{"status": "skipped", "reason": "already_exists", "source": {"id": "...", "title": "..."}}
-
-// Note added successfully
-{"status": "ok", "type": "note", "note": {"id": "...", "title": "..."}}
+/nlm-plan Should we use A* or RRT for ASV path planning?
+/nlm-plan FastDDS vs Zenoh for middleware?
 ```
 
 ---
 
-### `/nlm-delete` — Delete a source from local notebook
-**When to use:** Remove a specific source by URL or source ID.  
-**Trigger:** User only. Never auto-triggered.
+### `/nlm-add` — Add knowledge manually
 
 ```bash
-/nlm-delete --url "https://example.com/article"
-/nlm-delete --source-id "abc123xyz"
+/nlm-add --url "https://example.com/paper"
+/nlm-add --note "Key insight: COLREGS Rule 8 requires..." --title "COLREGS Notes"
 ```
-
-**Behind the scenes:**
-```bash
-bash ~/.claude/skills/nlm/scripts/invoke.sh delete \
-  --url "..." \
-  --project-path "$(pwd)"
-
-bash ~/.claude/skills/nlm/scripts/invoke.sh delete \
-  --source-id "..." \
-  --project-path "$(pwd)"
-```
-
-**Output:**
-```json
-// Success
-{"status": "ok", "deleted": {"id": "...", "title": "..."}}
-
-// Not found
-{"status": "not_found", "key": "https://..."}
-```
-
-URL matching is case-insensitive and ignores trailing slashes.
 
 ---
 
-### `/nlm-deduplicate` — Remove duplicate sources from a notebook
-**When to use:** Manually clean up duplicate URL sources in any notebook.  
-**Trigger:** User only. Never auto-triggered.
-
-> Note: `/nlm-research` already deduplicates automatically after each import. Use this skill for one-off manual cleanup.
-
-```bash
-/nlm-deduplicate
-/nlm-deduplicate --notebook-id "6c20d15e-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-```
-
-**Behind the scenes:**
-```bash
-# Current project's notebook
-bash ~/.claude/skills/nlm/scripts/invoke.sh deduplicate \
-  --project-path "$(pwd)"
-
-# Any notebook by ID (no project config needed)
-bash ~/.claude/skills/nlm/scripts/invoke.sh deduplicate \
-  --notebook-id "6c20d15e-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-```
-
-**Parameters:**
-
-| Parameter | Values | Default | Description |
-|-----------|--------|---------|-------------|
-| `--notebook-id` | UUID | — | Target notebook directly (overrides `--project-path`) |
-| `--project-path` | path | `$(pwd)` | Project root containing `.nlm/config.json` |
-
-**Output:**
-```json
-{"status": "ok", "notebook_id": "6c20d15e-...", "removed": 3, "failed_removed": 5, "kept": 12}
-```
-
-- `removed` — duplicate URL sources deleted
-- `failed_removed` — error/failed sources deleted
-- `kept` — sources remaining after cleanup
-
-Keeps the oldest source per URL; also deletes all failed/error sources.
-
----
-
-### `/nlm-setup` — Initialize or reconfigure project
-**When to use:** First time in a project, changing notebooks, or re-authenticating.  
-**Trigger:** User only.
-
-```bash
-# View current binding (no API call)
-/nlm-setup
-
-# Authenticate (opens Chrome browser)
-/nlm-setup --auth
-
-# Re-authenticate (clears saved session)
-/nlm-setup --reauth
-
-# List all notebooks in account (24h cached)
-/nlm-setup --notebook-list
-
-# Force refresh notebook list
-/nlm-setup --notebook-list --refresh
-
-# Bind an existing notebook as local
-/nlm-setup --add-local-notebook <UUID>
-
-# Add one or more global reference notebooks
-/nlm-setup --add-global-notebook <UUID1> <UUID2>
-
-# Create new notebook and bind as local
-/nlm-setup --create-local "Project Research Notes"
-
-# Create new notebook and add as global
-/nlm-setup --create-global "Domain Patterns"
-```
-
-**Standard init flow (3 steps):**
-1. Run `--notebook-list` → presents a table with `#`, `UUID`, `Title`, `Sources`, `Created`
-2. Select a notebook as local → run `--add-local-notebook <UUID>`
-3. Optionally add global reference notebooks → run `--add-global-notebook <UUID1> ...`
-
-**Auth flow:** Uses `patchright` with `channel="chrome"` to launch your real Chrome browser. Google sees a genuine browser — no Bluetooth/passkey prompts. Session saved to `~/.notebooklm/storage_state.json`.
-
----
-
-### `/nlm-migrate` — Promote knowledge to global notebook
-**When to use:** Found domain knowledge in your project that other projects should reuse.  
-**Trigger:** User only. Always confirms before writing.
+### `/nlm-migrate` — Promote to global notebook
 
 ```bash
 /nlm-migrate \
-  --content "Rate limiting should be implemented at API gateway, not per-service" \
-  --target-global "backend-patterns" \
-  --title "Rate Limiting Architecture"
+  --content "ESKF outperforms EKF for..." \
+  --target-global "maritime-engineering" \
+  --title "Sensor Fusion Findings"
 ```
+
+---
+
+## Domain Granularity Control
+
+The system automatically tracks domain health and suggests adjustments.
+
+**Optimal range:** 5–15 domain notebooks (production benchmark from Graph RAG in the Wild).
+
+**Three-gate creation policy** — when `/nlm-research --target auto` finds a new domain:
+
+| Gate | Condition | Action |
+|------|-----------|--------|
+| 1 | `source_count < 20` | Route to local; accumulate more first |
+| 2 | keyword overlap ≥ 40% with existing domain | Route to existing domain |
+| 3 | `total_domains ≥ 15` | Route to synthesis; review existing domains |
+
+**Automatic suggestions** (appear in `/nlm-research` output):
+- `merge_suggestions` — two domains with >40% keyword overlap + combined < 200 sources
+- `split_suggestions` — domain with > 200 sources
+- `domain_suggestion` — new domain detected (advisory; create with `/nlm-setup --create-domain`)
+
+---
+
+## Distillation Workflow (when a domain notebook > 270 sources)
+
+1. In NotebookLM UI: generate **Briefing Document** for the full domain notebook
+2. Download/copy the text
+3. Add to synthesis notebook as a distilled source:
+   ```bash
+   /nlm-add --note "<Briefing Doc content>" \
+            --title "Navigation Algorithms Briefing 2026-04"
+   # (while project config points to synthesis notebook as local)
+   ```
+
+This converts 300 raw sources into a single high-signal document in the META layer.
 
 ---
 
 ## Auto-trigger Rules
 
-| Command | Auto-trigger? | When |
-|---------|--------------|------|
-| `/nlm-ask` | ✅ Yes | Claude encounters knowledge uncertainty |
+| Skill | Auto-trigger? | When |
+|-------|--------------|------|
+| `/nlm-ask` | ✅ Yes | Knowledge uncertainty during coding |
 | `/nlm-plan` | ✅ Yes | User evaluates 2+ options |
-| `/nlm-research` (default: `--add-sources`) | ✅ Yes | Default behavior; sources imported automatically |
-| `/nlm-research --no-add-sources` | ✅ Yes | Read-only parallel subagent dispatch |
-| `/nlm-add` | ❌ No | User-triggered only (writes to notebook) |
-| `/nlm-delete` | ❌ No | User-triggered only (deletes from notebook) |
-| `/nlm-deduplicate` | ❌ No | User-triggered only (manual cleanup) |
-| `/nlm-setup` | ❌ No | User-triggered only (configuration) |
-| `/nlm-migrate` | ❌ No | User-triggered only (writes globally) |
+| `/nlm-research --no-add-sources` | ✅ Yes | Read-only subagent dispatch |
+| `/nlm-research --add-sources` | ❌ No | User-triggered (writes) |
+| `/nlm-add` | ❌ No | User-triggered (writes) |
+| `/nlm-setup` | ❌ No | User-triggered (configuration) |
+| `/nlm-migrate` | ❌ No | User-triggered (writes globally) |
 
 ---
 
-## Two-Tier Notebook Architecture
+## Config Schema v2 (`.nlm/config.json`)
 
-### Local Notebook (per project)
-- **Config:** `<project-root>/.nlm/config.json`
-- **Permissions:** Read + Write
-- **Use for:** Project decisions, research findings, notes
-
-### Global Notebooks (shared)
-- **Config:** `~/.nlm/global.json`
-- **Permissions:** Read-only during development
-- **Use for:** Reusable domain knowledge across projects
-
-### Query Routing
-- `auto` (default) — Local first; escalates to global on `low`/`not_found`
-- `local` — Project notebook only
-- `global` — Global notebooks only
+```json
+{
+  "local_notebook": {
+    "id": "<uuid>", "title": "PROJ · MASS-L3 · Local", "source_count": 0
+  },
+  "global_notebooks": [
+    {"id": "<uuid>", "title": "GLOBAL · Maritime Engineering · Reference"}
+  ],
+  "synthesis_notebook": {
+    "id": "<uuid>", "name": "META · ASV Research · Synthesis",
+    "source_count": 0, "last_distilled": null
+  },
+  "domain_notebooks": {
+    "navigation_algorithms": {
+      "id": "<uuid>",
+      "name": "DOMAIN · Navigation Algorithms · Research",
+      "description": "路径规划、避碰、COLREGS、感知融合",
+      "keywords": ["path planning", "collision avoidance", "COLREGS", "LiDAR"],
+      "source_count": 0,
+      "last_distilled": null
+    }
+  }
+}
+```
 
 ---
 
@@ -403,10 +287,11 @@ Keeps the oldest source per URL; also deletes all failed/error sources.
 | Error | Fix |
 |-------|-----|
 | `No notebooks configured` | Run `/nlm-setup` |
-| `confidence: not_found` | Run `/nlm-research --topic "..."` (sources auto-imported) |
+| `confidence: not_found` + `suggest_research: true` | Run `/nlm-research --topic "..."` first |
 | `Not authenticated` | Run `/nlm-setup --auth` |
-| Session expired (7+ days) | Run `/nlm-setup --reauth` |
-| Research timeout | Try `--depth fast` instead of `deep` |
+| Session expired | Run `/nlm-setup --reauth` |
+| `domain_suggestion` in research output | Run `/nlm-setup --create-domain` to register new domain |
+| `merge_suggestions` in output | Run `nlm setup --merge-domain ... --into ...` (future) |
 
 ---
 
@@ -414,51 +299,33 @@ Keeps the oldest source per URL; also deletes all failed/error sources.
 
 ```
 ~/.claude/skills/nlm/
-├── README.md                   # This file
+├── README.md
+├── docs/
+│   └── DESIGN_SPEC_V1.md           # Full design spec
 ├── scripts/
-│   ├── invoke.sh               # Wrapper (resolves symlinks, activates venv)
-│   ├── nlm.py                  # Main CLI (8 commands)
+│   ├── invoke.sh                    # Wrapper (venv + entry)
+│   ├── nlm.py                       # Main CLI (9 commands)
 │   └── lib/
-│       ├── client.py           # NotebookLM API wrapper (Playwright/patchright)
-│       ├── registry.py         # Config: local (.nlm/config.json) + global (~/.nlm/global.json)
-│       ├── auth.py             # Cookie-based auth via real Chrome (patchright channel="chrome")
-│       ├── auth_helper.py      # Shared auth utilities
-│       ├── answer_analyzer.py  # Confidence scoring (high/medium/low/not_found)
-│       ├── confidence_handler.py # --on-low-confidence logic (research/prompt/silent)
-│       ├── depth_decider.py    # Maps --depth fast/deep to timeouts
-│       ├── domain_router.py    # auto-scope: local-first, escalate to global on low confidence
-│       ├── notebook_registry.py # Notebook list cache (24h TTL)
-│       ├── notebook_router.py  # Routes ask queries across multiple global notebooks
-│       ├── plan_evaluator.py   # 1-5 score matrix, composite scores, research escalation
-│       ├── project_detector.py # Walk up dirs to find .nlm/config.json
-│       ├── skill_context.py    # Shared runtime context
-│       ├── source_selector.py  # Picks sources for research --add-sources
-│       └── card_writer.py      # Formats output cards
-├── skills/                     # Canonical SKILL.md sources
+│       ├── client.py               # NotebookLM API wrapper
+│       ├── registry.py             # Config I/O (v1 + v2 schema)
+│       ├── domain_classifier.py    # Keyword-based topic→domain routing
+│       ├── domain_guard.py         # Three-gate creation guard + merge/split
+│       ├── notebook_router.py      # Claude Haiku global notebook ranking
+│       ├── confidence_handler.py   # Low-confidence post-processing
+│       ├── topic_tracker.py        # Relevance scoring profile
+│       ├── plan_evaluator.py       # Option comparison
+│       └── auth.py                 # Chrome auth via patchright
+├── skills/
 │   ├── nlm-ask/SKILL.md
-│   ├── nlm-plan/SKILL.md
 │   ├── nlm-research/SKILL.md
-│   ├── nlm-add/SKILL.md
-│   ├── nlm-delete/SKILL.md
-│   ├── nlm-deduplicate/SKILL.md
 │   ├── nlm-setup/SKILL.md
+│   ├── nlm-plan/SKILL.md
+│   ├── nlm-add/SKILL.md
 │   └── nlm-migrate/SKILL.md
 └── .venv/
 
-~/.claude/skills/
-├── nlm-ask/SKILL.md            # Flat skill (Claude Code invocable)
-├── nlm-plan/SKILL.md
-├── nlm-research/SKILL.md
-├── nlm-add/SKILL.md
-├── nlm-delete/SKILL.md
-├── nlm-deduplicate/SKILL.md
-├── nlm-setup/SKILL.md
-└── nlm-migrate/SKILL.md
-
-~/.notebooklm/
-├── storage_state.json          # Google auth cookies (shared across projects)
-└── chrome_profile/             # Persistent Chrome profile for patchright
-
-<project-root>/
-└── .nlm/config.json            # { local_notebook_id, global_notebook_ids[] }
+<project-root>/.nlm/
+├── config.json          # Notebook bindings (v2 schema with domain_notebooks)
+├── topics.json          # Topic profile for relevance scoring
+└── notebooks_cache.json # 24h notebook metadata cache
 ```

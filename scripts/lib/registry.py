@@ -58,12 +58,24 @@ def _resolve_global_ids(config: dict) -> list[str]:
     return config.get("global_notebook_ids", [])
 
 
+def _resolve_synthesis_id(config: dict) -> str | None:
+    """Return synthesis notebook ID from config. Returns None if not set."""
+    if synthesis := config.get("synthesis_notebook"):
+        return synthesis.get("id")
+    return None
+
+
+def _resolve_domain_notebooks(config: dict) -> dict[str, dict]:
+    """Return domain_notebooks dict from config. Returns {} if not set."""
+    return config.get("domain_notebooks", {})
+
+
 def find_notebook_ids(scope: str, project_path: Path) -> list[str]:
     """Return ordered list of notebook IDs to try for given scope.
 
-    Supports both new schema (local_notebook/global_notebooks objects)
+    Supports scopes: auto, local, global, synthesis, domain:<key>
+    Also supports both new schema (local_notebook/global_notebooks objects)
     and old schema (local_notebook_id/global_notebook_ids strings) for migration.
-    Global notebooks are now per-project (stored in .nlm/config.json).
     """
     ids: list[str] = []
     cfg = load_project_config(project_path)
@@ -74,6 +86,17 @@ def find_notebook_ids(scope: str, project_path: Path) -> list[str]:
 
     if scope in ("global", "auto"):
         ids.extend(_resolve_global_ids(cfg))
+
+    if scope == "synthesis":
+        if synthesis_id := _resolve_synthesis_id(cfg):
+            ids.append(synthesis_id)
+
+    if scope.startswith("domain:"):
+        key = scope[len("domain:"):]
+        domain_nbs = _resolve_domain_notebooks(cfg)
+        if nb := domain_nbs.get(key):
+            if nb_id := nb.get("id"):
+                ids.append(nb_id)
 
     return ids
 
