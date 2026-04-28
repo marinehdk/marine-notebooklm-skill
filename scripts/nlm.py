@@ -8,6 +8,7 @@ Usage:
   nlm add --url URL | --note "text" [--title "title"]
   nlm setup [--auth] [--reauth] [--notebook-list] [--refresh] [--add-local-notebook UUID] [--add-global-notebook UUID ...] [--create-local TITLE] [--create-global TITLE] [--project-path PATH]
   nlm migrate --content "..." --target-global DOMAIN [--title TITLE]
+  nlm topic [--clear] [--project-path PATH]
 """
 
 import argparse
@@ -408,6 +409,13 @@ def cmd_ask(args: list[str]) -> None:
                 cite["citation_number"] = i
         result["citations"] = deduped
 
+    # Record question to topic profile (silent — never blocks the answer)
+    try:
+        from lib.topic_tracker import TopicTracker
+        TopicTracker(project_path).record_ask(parsed.question)
+    except Exception:
+        pass
+
     if parsed.format == "json":
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
@@ -453,6 +461,14 @@ def cmd_research(args: list[str]) -> None:
     parser.add_argument("--topic", required=True)
     parser.add_argument("--depth", choices=["fast", "deep"], default="fast")
     parser.add_argument("--add-sources", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--max-import", type=int, default=None,
+        help="Max sources to import per run (fast~10, deep~50). Pass 0 to skip import.",
+    )
+    parser.add_argument(
+        "--min-relevance", type=float, default=0.1,
+        help="Delete imported sources scoring below this threshold (0.0=off, default=0.1).",
+    )
     parser.add_argument("--project-path", default=".")
     parsed = parser.parse_args(args)
 
@@ -467,9 +483,26 @@ def cmd_research(args: list[str]) -> None:
         sys.exit(1)
 
     from lib.progress import step, done, warn
+    from lib.client import CapacityError
+    from lib.topic_tracker import TopicTracker
 
-    total = 4 if parsed.add_sources else 2
-    timeout_label = "60s" if parsed.depth == "fast" else "180s"
+    # Record research topic to the project profile (weight=2: intentional signal)
+    tracker = TopicTracker(project_path)
+    tracker.record_research(parsed.topic)
+    topic_weights = tracker.keyword_weights()
+
+    # Default import cap: 10 sources per run
+    if parsed.max_import is None:
+        max_import = 10
+    else:
+        max_import = parsed.max_import
+
+    # max_import=0 is equivalent to --no-add-sources
+    if max_import == 0:
+        parsed.add_sources = False
+
+    total = 5 if parsed.add_sources else 2
+    timeout_label = "60s" if parsed.depth == "fast" else "600s"
 
     step(1, total, f"Starting {parsed.depth} research (timeout: {timeout_label}): {parsed.topic[:60]}...")
     result = client.research(notebook_id, parsed.topic, mode=parsed.depth)
@@ -488,13 +521,23 @@ def cmd_research(args: list[str]) -> None:
 
     sources_imported = []
     duplicates_removed = 0
+    capacity_warning = None
+    prune_result = {"scored": [], "kept": 0, "pruned": 0}
+
     if parsed.add_sources and result.get("task_id") and result.get("sources"):
-        step(2, total, f"Importing {len(result['sources'])} sources into notebook...")
+        import_count = min(max_import, len(result["sources"]))
+        step(2, total, f"Importing top {import_count} of {len(result['sources'])} sources (cap: {max_import})...")
         try:
             sources_imported = client.import_research_sources(
-                notebook_id, result["task_id"], result["sources"]
+                notebook_id, result["task_id"], result["sources"],
+                max_sources=max_import,
             )
             done(2, total, f"Imported {len(sources_imported)} sources")
+        except CapacityError as e:
+            capacity_warning = str(e)
+            warn(f"Notebook capacity reached — {capacity_warning}")
+            warn("Run /nlm-deduplicate to free space, then retry.")
+            sources_imported = []
         except Exception as e:
             warn(f"Source import failed ({type(e).__name__}) — research results still shown below")
             sources_imported = []
@@ -510,15 +553,47 @@ def cmd_research(args: list[str]) -> None:
         except Exception as e:
             warn(f"Deduplication failed ({type(e).__name__}) — skipped")
 
-    print(json.dumps({
+        # Step 4: relevance scoring — prune sources below min_relevance threshold
+        prune_result = {"scored": [], "kept": len(sources_imported), "pruned": 0}
+        if sources_imported and parsed.min_relevance > 0 and topic_weights:
+            new_ids = [s["id"] for s in sources_imported if isinstance(s, dict) and "id" in s]
+            if new_ids:
+                step(4, total, f"Scoring {len(new_ids)} sources against topic profile "
+                               f"(threshold={parsed.min_relevance})...")
+                try:
+                    prune_result = client.score_and_prune_sources(
+                        notebook_id, new_ids, topic_weights,
+                        min_score=parsed.min_relevance,
+                    )
+                    msg = (f"Relevance scoring done — kept {prune_result['kept']}, "
+                           f"pruned {prune_result['pruned']}")
+                    done(4, total, msg)
+                except Exception as e:
+                    warn(f"Relevance scoring failed ({type(e).__name__}) — skipped")
+        elif parsed.min_relevance > 0 and not topic_weights:
+            warn("No topic profile yet — relevance scoring skipped (run more ask/research first)")
+
+    out = {
         "status": "ok",
         "topic": parsed.topic,
         "report": result.get("report", ""),
         "sources": result.get("sources", []),
         "sources_imported": len(sources_imported),
+        "sources_pruned": prune_result["pruned"],
         "duplicates_removed": duplicates_removed,
         "add_sources": parsed.add_sources,
-    }, indent=2, ensure_ascii=False))
+        "max_import": max_import,
+        "min_relevance": parsed.min_relevance,
+    }
+    if capacity_warning:
+        out["capacity_warning"] = capacity_warning
+    if prune_result.get("scored"):
+        out["relevance_scores"] = [
+            {"id": r["id"], "score": r["score"], "kept": r["kept"],
+             "keywords": r.get("keywords", [])}
+            for r in prune_result["scored"]
+        ]
+    print(json.dumps(out, indent=2, ensure_ascii=False))
 
 
 def cmd_add(args: list[str]) -> None:
@@ -645,6 +720,35 @@ def cmd_migrate(args: list[str]) -> None:
     }, indent=2, ensure_ascii=False))
 
 
+def cmd_topic(args: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="nlm topic")
+    parser.add_argument("--project-path", default=".")
+    parser.add_argument("--clear", action="store_true", help="Clear the topic profile for this project")
+    parsed = parser.parse_args(args)
+
+    project_path = Path(parsed.project_path).expanduser().resolve()
+
+    from lib.topic_tracker import TopicTracker
+    tracker = TopicTracker(project_path)
+
+    if parsed.clear:
+        topics_file = project_path / ".nlm" / "topics.json"
+        if topics_file.exists():
+            topics_file.unlink()
+        print(json.dumps({"status": "ok", "message": "Topic profile cleared"}))
+        return
+
+    summary = tracker.summary()
+    print(json.dumps({
+        "status": "ok",
+        "project_path": str(project_path),
+        "total_entries": summary["total_entries"],
+        "top_keywords": summary["top_keywords"],
+        "note": "Relevance scoring is active" if summary["total_entries"] > 0
+                else "No topics recorded yet — run /nlm-ask or /nlm-research first",
+    }, indent=2, ensure_ascii=False))
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -669,6 +773,8 @@ def main() -> None:
         cmd_deduplicate(args)
     elif command == "migrate":
         cmd_migrate(args)
+    elif command == "topic":
+        cmd_topic(args)
     else:
         print(f"Unknown command: {command}", file=sys.stderr)
         sys.exit(1)

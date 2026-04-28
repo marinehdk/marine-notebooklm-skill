@@ -35,11 +35,7 @@ $INVOKE deduplicate --notebook-id "6c20d15e-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ## Output
 
 ```json
-{"status": "ok", "notebook_id": "6c20d15e-...", "removed": 3, "failed_removed": 5, "kept": 12}
+{"status": "ok", "notebook_id": "6c20d15e-...", "removed": 3, "kept": 12}
 ```
 
-- `removed` — duplicate URL sources deleted
-- `failed_removed` — error/failed sources deleted
-- `kept` — sources remaining after cleanup
-
-If both `removed` and `failed_removed` are 0, tell the user "笔记本来源无重复且无失败来源，无需清理。"
+If `removed` is 0, tell the user "笔记本来源无重复，无需清理。"

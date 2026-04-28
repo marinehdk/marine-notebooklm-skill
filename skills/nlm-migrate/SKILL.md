@@ -22,8 +22,8 @@ Before running, show the user what will be written and to which global notebook,
 ## Usage
 
 ```bash
-INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE migrate --content "<knowledge text>" --target-global "<domain>" --title "<title>"
+INVOKE="$HOME/.claude/skills/nlm/scripts/invoke.sh"
+bash $INVOKE migrate --content "<knowledge text>" --target-global "<domain>" --title "<title>"
 ```
 
 ## Available global notebooks

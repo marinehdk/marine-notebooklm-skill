@@ -22,8 +22,8 @@ Query your NotebookLM notebook for grounded answers. Auto-triggered when Claude 
 ## Usage
 
 ```bash
-INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE ask --question "<question>" --scope auto --on-low-confidence research --format json
+INVOKE="$HOME/.claude/skills/nlm/scripts/invoke.sh"
+bash $INVOKE ask --question "<question>" --scope auto --on-low-confidence research --format json
 ```
 
 ## Output
@@ -33,6 +33,8 @@ $INVOKE ask --question "<question>" --scope auto --on-low-confidence research --
   "answer": "...",
   "confidence": "high|medium|low|not_found",
   "source_notebook": "local|global",
+  "source_notebook_id": "6c20d15e-abc2-4d0c-a782-5bfff06250d4",
+  "source_notebook_title": "SINAN-基础设施层设计",
   "citations": [{"citation_number": 1, "text": "..."}],
   "next_action": {
     "type": "suggest_research",

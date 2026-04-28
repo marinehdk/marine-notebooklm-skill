@@ -24,8 +24,8 @@ If options or question are missing, ask the user before running.
 ## Usage
 
 ```bash
-INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
-$INVOKE plan --question "<decision>" --options "A,B" --criteria "performance,maintainability"
+INVOKE="$HOME/.claude/skills/nlm/scripts/invoke.sh"
+bash $INVOKE plan --question "<decision>" --options "A,B" --criteria "performance,maintainability"
 ```
 
 ## Output

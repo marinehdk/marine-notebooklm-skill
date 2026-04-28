@@ -5,6 +5,10 @@ from typing import Any
 from notebooklm import NotebookLMClient
 from notebooklm.exceptions import NetworkError
 
+
+class CapacityError(Exception):
+    """Raised when a notebook is at or near its source capacity limit."""
+
 # Timeout for chat.ask operations (seconds).
 # Notebooks with many sources can take 60+s to respond.
 _ASK_TIMEOUT = 120.0
@@ -183,9 +187,9 @@ def delete_source(
 def research(notebook_id: str, topic: str, mode: str = "fast") -> dict[str, Any]:
     """Start research and poll until complete. Returns report + sources.
 
-    NOTE: deep research can take 120-180s. Adjust timeout accordingly.
+    NOTE: deep research can take 3-10 mins. Adjust timeout accordingly.
     fast: 60s timeout, 3s poll interval
-    deep: 180s timeout, 5s poll interval
+    deep: 600s timeout, 10s poll interval
     """
     async def _run():
         async with await NotebookLMClient.from_storage() as client:
@@ -194,9 +198,14 @@ def research(notebook_id: str, topic: str, mode: str = "fast") -> dict[str, Any]
                 return {"status": "error", "report": "", "sources": [], "task_id": None}
 
             task_id = start_result.get("task_id")
-            timeout_secs = 180 if mode == "deep" else 60
-            poll_interval = 5 if mode == "deep" else 3
+            timeout_secs = 600 if mode == "deep" else 60
+            poll_interval = 10 if mode == "deep" else 1
+            # Grace period = 3 poll cycles. Accepts "completed" without seen_in_progress
+            # only after this window, to guard against picking up a stale result from a
+            # previous research while the new task hasn't registered yet.
+            grace_secs = poll_interval * 3
             deadline = time.time() + timeout_secs
+            loop_start = time.time()
             seen_in_progress = False
 
             while time.time() < deadline:
@@ -204,7 +213,7 @@ def research(notebook_id: str, topic: str, mode: str = "fast") -> dict[str, Any]
                 status = poll.get("status")
                 if status == "in_progress":
                     seen_in_progress = True
-                if status == "completed" and seen_in_progress:
+                if status == "completed" and (seen_in_progress or time.time() - loop_start > grace_secs):
                     return {
                         "status": "completed",
                         "report": poll.get("report") or poll.get("summary", ""),
@@ -223,9 +232,9 @@ async def research_async(notebook_id: str, topic: str, mode: str = "fast", retri
     Start research and poll until complete. Returns report + sources.
     Same timeout and retry logic as sync version.
 
-    NOTE: deep research can take 120-180s. Adjust timeout accordingly.
+    NOTE: deep research can take 3-10 mins. Adjust timeout accordingly.
     fast: 60s timeout, 3s poll interval
-    deep: 180s timeout, 5s poll interval
+    deep: 600s timeout, 10s poll interval
     """
     for attempt in range(retries + 1):
         try:
@@ -235,9 +244,11 @@ async def research_async(notebook_id: str, topic: str, mode: str = "fast", retri
                     return {"status": "error", "report": "", "sources": [], "task_id": None}
 
                 task_id = start_result.get("task_id")
-                timeout_secs = 180 if mode == "deep" else 60
-                poll_interval = 5 if mode == "deep" else 3
+                timeout_secs = 600 if mode == "deep" else 60
+                poll_interval = 10 if mode == "deep" else 1
+                grace_secs = poll_interval * 3
                 deadline = time.time() + timeout_secs
+                loop_start = time.time()
                 seen_in_progress = False
 
                 while time.time() < deadline:
@@ -245,7 +256,7 @@ async def research_async(notebook_id: str, topic: str, mode: str = "fast", retri
                     status = poll.get("status")
                     if status == "in_progress":
                         seen_in_progress = True
-                    if status == "completed" and seen_in_progress:
+                    if status == "completed" and (seen_in_progress or time.time() - loop_start > grace_secs):
                         return {
                             "status": "completed",
                             "report": poll.get("report") or poll.get("summary", ""),
@@ -262,16 +273,26 @@ async def research_async(notebook_id: str, topic: str, mode: str = "fast", retri
                 raise
 
 
-def import_research_sources(notebook_id: str, task_id: str, sources: list[dict]) -> list[dict]:
+_NOTEBOOK_CAPACITY = 300
+_NOTEBOOK_CAPACITY_WARN = 290  # warn and cap imports at this threshold
+
+
+def import_research_sources(
+    notebook_id: str,
+    task_id: str,
+    sources: list[dict],
+    max_sources: int | None = None,
+) -> list[dict]:
     """Import research sources, then wait for all to finish processing in parallel.
 
     Strategy:
     1. Snapshot existing source IDs before import.
-    2. Fire import_sources() — RPC may timeout but server keeps processing.
-    3. Poll sources.list() until new sources appear (max 15s).
-    4. Use wait_for_sources() to await all new sources in parallel.
-    5. Delete any that end up in ERROR state.
-    6. Return only successfully imported sources.
+    2. Guard against notebook capacity (300 source limit); trim to max_sources if set.
+    3. Fire import_sources() — RPC may timeout but server keeps processing.
+    4. Poll sources.list() until new sources appear (30s normal, 45s if import RPC timed out).
+    5. Use wait_for_sources() to await all new sources in parallel.
+    6. Delete any that end up in ERROR state.
+    7. Return only successfully imported sources.
     """
     async def _run():
         async with await NotebookLMClient.from_storage(timeout=_IMPORT_TIMEOUT) as client:
@@ -280,24 +301,38 @@ def import_research_sources(notebook_id: str, task_id: str, sources: list[dict])
             existing_ids = {s.id for s in existing}
             existing_urls = {s.url.rstrip("/").lower() for s in existing if s.url}
 
-            # Filter out URLs already present in the notebook
+            # Step 2a: capacity guard — refuse to import when at or near limit
+            available_slots = _NOTEBOOK_CAPACITY_WARN - len(existing)
+            if available_slots <= 0:
+                raise CapacityError(
+                    f"Notebook is at capacity ({len(existing)}/{_NOTEBOOK_CAPACITY} sources). "
+                    "Run /nlm-deduplicate to free space before importing more sources."
+                )
+
+            # Step 2b: filter already-present URLs, then apply max_sources and capacity caps
             new_sources = [
                 s for s in sources
                 if not (s.get("url") or "").rstrip("/").lower() in existing_urls
             ]
+            cap = min(available_slots, max_sources if max_sources is not None else len(new_sources))
+            new_sources = new_sources[:cap]
+
             if not new_sources:
                 return []
 
-            # Step 2: fire import (ignore timeout — server continues processing)
+            # Step 3: fire import (RPC may timeout — server keeps processing regardless)
+            import_ok = False
             try:
                 await client.research.import_sources(notebook_id, task_id, new_sources)
+                import_ok = True
             except Exception:
                 pass
 
-            # Step 3: poll until new sources appear (up to 15s)
+            # Step 3: poll until new sources appear (up to 45s; longer window for deep
+            # research with many sources, or when the import RPC timed out server-side)
             new_sources = []
-            deadline = time.time() + 15
-            while time.time() < deadline:
+            detect_deadline = time.time() + (45 if not import_ok else 30)
+            while time.time() < detect_deadline:
                 await asyncio.sleep(2)
                 current = await client.sources.list(notebook_id)
                 new_sources = [s for s in current if s.id not in existing_ids]
@@ -374,6 +409,97 @@ def deduplicate_notebook_sources(notebook_id: str) -> dict[str, int]:
 
             kept = len(sources) - len(to_delete)
             return {"removed": len(dup_ids), "failed_removed": len(failed_ids), "kept": kept}
+
+    return asyncio.run(_run())
+
+
+def _score_keywords(source_keywords: list[str], topic_weights: dict[str, float]) -> float:
+    """Score source keywords against a topic weight profile. Returns 0.0–1.0.
+
+    Uses bidirectional substring matching so "COLREGs 避碰" hits topic "避碰"
+    and vice versa.  Returns 0.5 when topic_weights is empty (neutral/no-op).
+    """
+    if not topic_weights:
+        return 0.5
+    total = sum(topic_weights.values())
+    if total == 0.0:
+        return 0.5
+    source_lower = [k.lower() for k in source_keywords if k]
+    matched = 0.0
+    for tw, w in topic_weights.items():
+        for sk in source_lower:
+            if tw in sk or sk in tw:
+                matched += w
+                break
+    return min(1.0, matched / total)
+
+
+def score_and_prune_sources(
+    notebook_id: str,
+    source_ids: list[str],
+    topic_weights: dict[str, float],
+    min_score: float = 0.1,
+) -> dict:
+    """Score newly imported sources via get_guide(), delete those below min_score.
+
+    Args:
+        notebook_id:   Target notebook.
+        source_ids:    IDs of sources to evaluate (typically freshly imported).
+        topic_weights: Keyword→weight profile from TopicTracker.keyword_weights().
+                       Pass {} to skip scoring entirely (all sources kept).
+        min_score:     Sources scoring below this threshold are deleted. Default 0.1.
+
+    Returns dict with keys:
+        scored  – list of {id, keywords, summary, score, kept}
+        kept    – count of sources kept
+        pruned  – count of sources deleted
+    """
+    async def _guide_one(client, sid: str) -> tuple[str, dict | Exception]:
+        try:
+            return sid, await client.sources.get_guide(notebook_id, sid)
+        except Exception as e:
+            return sid, e
+
+    async def _run():
+        async with await NotebookLMClient.from_storage() as client:
+            # Fetch all guides in parallel
+            pairs = await asyncio.gather(*[_guide_one(client, sid) for sid in source_ids])
+
+            scored = []
+            to_delete: list[str] = []
+
+            for sid, guide in pairs:
+                if isinstance(guide, Exception):
+                    # Can't score → keep by default
+                    scored.append({"id": sid, "score": None, "kept": True,
+                                   "error": type(guide).__name__})
+                    continue
+
+                keywords = guide.get("keywords", [])
+                score = _score_keywords(keywords, topic_weights)
+                keep = (score >= min_score) or not topic_weights
+                scored.append({
+                    "id": sid,
+                    "keywords": keywords,
+                    "summary": (guide.get("summary") or "")[:120],
+                    "score": round(score, 3),
+                    "kept": keep,
+                })
+                if not keep:
+                    to_delete.append(sid)
+
+            # Delete low-relevance sources
+            for sid in to_delete:
+                try:
+                    await client.sources.delete(notebook_id, sid)
+                except Exception:
+                    pass
+
+            return {
+                "scored": scored,
+                "kept": sum(1 for r in scored if r["kept"]),
+                "pruned": len(to_delete),
+            }
 
     return asyncio.run(_run())
 
