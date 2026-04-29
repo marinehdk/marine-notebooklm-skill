@@ -73,15 +73,33 @@ $INVOKE add --note "<insight>" --title "<title>" --project-path "."
 ## setup — Project initialization
 
 ```bash
-# First time: list notebooks and choose
-$INVOKE setup --project-path "."
-# Re-invoke with chosen ID
-$INVOKE setup --project-path "." --notebook-id "<uuid>"
-# Create new notebook
-$INVOKE setup --project-path "." --create "Project Research Notes"
+# 1. Auth (first time only)
+$INVOKE setup --auth
+
+# 2. List all notebooks in your account
+$INVOKE setup --notebook-list
+
+# 3. Create or bind notebooks for this project (4-tier architecture):
+#    PROJ · Local: project-specific knowledge (one per project)
+$INVOKE setup --create-local "MASS-L3"
+#    or bind existing: $INVOKE setup --add-local-notebook <UUID>
+
+#    DOMAIN · Research: single-topic deep research (5–15 per project)
+$INVOKE setup --create-domain "COLAV Algorithms" \
+              --domain-key colav_algorithms \
+              --domain-keywords "collision avoidance,COLREGs,MPC,path planning"
+
+#    META · Synthesis: cross-domain briefings (one per project)
+$INVOKE setup --create-synthesis "MASS-L3 Research"
+
+#    GLOBAL · Reference: cross-project stable knowledge (bind from existing)
+$INVOKE setup --add-global-notebook <UUID>
+
+# 4. Check current config
+$INVOKE setup --status
 ```
 
-Run once per project. Config saved to `.nlm/config.json`.
+Run once per project (or when adding a new tier). Config saved to `.nlm/config.json`.
 
 ## delete — Remove a source from local notebook
 

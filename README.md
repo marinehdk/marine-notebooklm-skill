@@ -230,9 +230,11 @@ The system automatically tracks domain health and suggests adjustments.
 2. Download/copy the text
 3. Add to synthesis notebook as a distilled source:
    ```bash
-   /nlm-add --note "<Briefing Doc content>" \
-            --title "Navigation Algorithms Briefing 2026-04"
-   # (while project config points to synthesis notebook as local)
+   INVOKE="bash $HOME/.claude/skills/nlm/scripts/invoke.sh"
+   $INVOKE add --note "<Briefing Doc content>" \
+               --title "Navigation Algorithms Briefing 2026-04" \
+               --target synthesis \
+               --project-path "."
    ```
 
 This converts 300 raw sources into a single high-signal document in the META layer.
