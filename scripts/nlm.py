@@ -34,6 +34,7 @@ from lib.notebook_router import route_notebooks
 from lib.confidence_handler import handle_confidence
 from lib.domain_classifier import classify_domain
 from lib.domain_guard import check_new_domain, check_merge_candidates, check_split_candidates
+from lib.bibliography import parse_bibliography_urls
 from lib import client
 
 _DISTILL_TRIGGER = 270  # Suggest synthesis distillation above this source count
@@ -766,7 +767,9 @@ def cmd_research(args: list[str]) -> None:
 
     all_sources = result.get("sources", [])
     n_found = len(all_sources)
-    n_cited = result.get("sources_cited_count", 0)
+    # GAP-12/GAP-9: parse bibliography to find cited URLs (replaces dead cited_in_report field)
+    cited_urls: set[str] = parse_bibliography_urls(result.get("report", ""))
+    n_cited = len(cited_urls)  # GAP-11: was result.get("sources_cited_count", 0) — always 0
     cite_note = f" ({n_cited} cited in report)" if n_cited else ""
     done(1, total, f"Research complete — {n_found} sources found{cite_note}")
 
@@ -777,10 +780,17 @@ def cmd_research(args: list[str]) -> None:
     new_notebook_suggestion: str | None = None
 
     if parsed.add_sources and result.get("task_id") and all_sources:
-        # Use only sources actually cited in the report bibliography.
-        # Falls back to all sources when report has no numbered references (fast research).
-        cited_sources = [s for s in all_sources if s.get("cited_in_report")]
-        sources_to_import = cited_sources if cited_sources else all_sources
+        # GAP-9: use bibliography-parsed cited URLs instead of dead cited_in_report field.
+        # deep research: import only sources whose URL was cited in the report bibliography.
+        # fast research: report has no bibliography → cited_urls is empty → import all.
+        if cited_urls:
+            cited_lower = {u.rstrip("/").lower() for u in cited_urls}
+            sources_to_import = [
+                s for s in all_sources
+                if (s.get("url") or "").rstrip("/").lower() in cited_lower
+            ]
+        else:
+            sources_to_import = all_sources
         n_skipped = n_found - len(sources_to_import)
 
         cap_note = f" (capped at {parsed.max_import})" if parsed.max_import else ""
@@ -884,7 +894,7 @@ def cmd_research(args: list[str]) -> None:
         "target_notebook": target_notebook_name,
         "report": result.get("report", ""),
         "sources": result.get("sources", []),
-        "sources_cited_count": result.get("sources_cited_count", 0),
+        "sources_cited_count": n_cited,
         "sources_imported": len(sources_imported),
         "sources_pruned": prune_result["pruned"],
         "duplicates_removed": duplicates_removed,
