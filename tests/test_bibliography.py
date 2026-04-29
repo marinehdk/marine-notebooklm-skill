@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -67,3 +66,9 @@ Content
 """
     urls = parse_bibliography_urls(report)
     assert urls == {"https://same.com/paper"}
+
+
+def test_rejects_parenthesised_url_format():
+    urls = parse_bibliography_urls(MARKDOWN_LINK_FORMAT)
+    assert "https://wrong-format.com" not in urls
+    assert "https://correct.com/paper" in urls
