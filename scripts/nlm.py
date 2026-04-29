@@ -411,7 +411,7 @@ def cmd_ask(args: list[str]) -> None:
     parser.add_argument(
         "--on-low-confidence",
         choices=["prompt", "research", "silent"],
-        default="research",
+        default="prompt",  # GAP-3: spec §3.2.2 + §6 "never auto-write"
     )
     parsed = parser.parse_args(args)
 
