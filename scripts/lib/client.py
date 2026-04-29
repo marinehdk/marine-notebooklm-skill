@@ -417,9 +417,12 @@ def _score_keywords(source_keywords: list[str], topic_weights: dict[str, float])
     """Score source keywords against a topic weight profile. Returns 0.0–1.0.
 
     Uses bidirectional substring matching so "COLREGs 避碰" hits topic "避碰"
-    and vice versa.  Returns 0.5 when topic_weights is empty (neutral/no-op).
+    and vice versa.  Returns 0.5 when topic_weights or source_keywords is empty
+    (neutral/no-op — prevents new sources with no keywords from being auto-deleted).
     """
     if not topic_weights:
+        return 0.5
+    if not source_keywords:  # GAP-1: fallback keep for sources with empty keywords
         return 0.5
     total = sum(topic_weights.values())
     if total == 0.0:
@@ -427,8 +430,9 @@ def _score_keywords(source_keywords: list[str], topic_weights: dict[str, float])
     source_lower = [k.lower() for k in source_keywords if k]
     matched = 0.0
     for tw, w in topic_weights.items():
+        tw_lower = tw.lower()
         for sk in source_lower:
-            if tw in sk or sk in tw:
+            if tw_lower in sk or sk in tw_lower:
                 matched += w
                 break
     return min(1.0, matched / total)
@@ -447,12 +451,13 @@ def score_and_prune_sources(
         source_ids:    IDs of sources to evaluate (typically freshly imported).
         topic_weights: Keyword→weight profile from TopicTracker.keyword_weights().
                        Pass {} to skip scoring entirely (all sources kept).
-        min_score:     Sources scoring below this threshold are deleted. Default 0.1.
+        min_score:     (reserved, no longer used for deletion; scores are advisory)
 
     Returns dict with keys:
-        scored  – list of {id, keywords, summary, score, kept}
-        kept    – count of sources kept
-        pruned  – count of sources deleted
+        scored         – list of {id, keywords, summary, score, kept}
+        kept           – count of sources kept (always == len(source_ids))
+        pruned         – always 0 (spec §3.3.5: no auto-delete)
+        notebook_count – same as kept; for caller use
     """
     async def _guide_one(client, sid: str) -> tuple[str, dict | Exception]:
         try:
@@ -466,7 +471,6 @@ def score_and_prune_sources(
             pairs = await asyncio.gather(*[_guide_one(client, sid) for sid in source_ids])
 
             scored = []
-            to_delete: list[str] = []
 
             for sid, guide in pairs:
                 if isinstance(guide, Exception):
@@ -477,28 +481,20 @@ def score_and_prune_sources(
 
                 keywords = guide.get("keywords", [])
                 score = _score_keywords(keywords, topic_weights)
-                keep = (score >= min_score) or not topic_weights
                 scored.append({
                     "id": sid,
                     "keywords": keywords,
                     "summary": (guide.get("summary") or "")[:120],
                     "score": round(score, 3),
-                    "kept": keep,
+                    "kept": True,  # GAP-1/spec §3.3.5: never auto-delete; advisory only
                 })
-                if not keep:
-                    to_delete.append(sid)
 
-            # Delete low-relevance sources
-            for sid in to_delete:
-                try:
-                    await client.sources.delete(notebook_id, sid)
-                except Exception:
-                    pass
-
+            # GAP-4: notebook_count field; GAP-1: no deletion
             return {
                 "scored": scored,
-                "kept": sum(1 for r in scored if r["kept"]),
-                "pruned": len(to_delete),
+                "kept": len(scored),
+                "pruned": 0,
+                "notebook_count": len(scored),
             }
 
     return asyncio.run(_run())

@@ -831,7 +831,7 @@ def cmd_research(args: list[str]) -> None:
 
         new_ids = [s["id"] for s in sources_imported if isinstance(s, dict) and "id" in s]
 
-        if new_ids and parsed.min_relevance > 0:
+        if new_ids and notebook_count >= 250:  # spec §3.3.5: score only when near capacity
             from lib.topic_tracker import _extract_keywords
             query_kws = _extract_keywords(parsed.topic)
             combined_weights: dict[str, float] = dict(topic_weights)
@@ -842,18 +842,16 @@ def cmd_research(args: list[str]) -> None:
                 try:
                     prune_result = client.score_and_prune_sources(
                         notebook_id, new_ids, combined_weights,
-                        min_score=parsed.min_relevance,
                     )
-                    notebook_count = prune_result.get("notebook_count", notebook_count)
                     done(4, total,
-                         f"Pruned {prune_result['pruned']} sources — {notebook_count}/300 remaining")
+                         f"Scored {len(prune_result['scored'])} sources — {notebook_count}/300 (no auto-delete)")
                 except Exception as e:
                     warn(f"Relevance scoring failed ({type(e).__name__}) — skipped")
                     done(4, total, f"Scoring failed — {notebook_count}/300")
             else:
                 done(4, total, f"No keywords — scoring skipped, {notebook_count}/300")
         else:
-            reason = "no new sources" if not new_ids else "min_relevance=0"
+            reason = "no new sources" if not new_ids else f"notebook_count={notebook_count}<250"
             done(4, total, f"Scoring skipped ({reason}) — {notebook_count}/300")
 
         if notebook_count >= 250:  # NOTEBOOK_WARN_THRESHOLD
