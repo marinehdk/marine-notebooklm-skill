@@ -428,6 +428,8 @@ def _score_keywords(source_keywords: list[str], topic_weights: dict[str, float])
     if total == 0.0:
         return 0.5
     source_lower = [k.lower() for k in source_keywords if k]
+    if not source_lower:  # GAP-1: all entries were empty strings
+        return 0.5
     matched = 0.0
     for tw, w in topic_weights.items():
         tw_lower = tw.lower()
@@ -444,7 +446,7 @@ def score_and_prune_sources(
     topic_weights: dict[str, float],
     min_score: float = 0.1,
 ) -> dict:
-    """Score newly imported sources via get_guide(), delete those below min_score.
+    """Score newly imported sources via get_guide() (advisory only; no deletion).
 
     Args:
         notebook_id:   Target notebook.

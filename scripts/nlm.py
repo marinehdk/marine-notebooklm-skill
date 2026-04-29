@@ -823,11 +823,11 @@ def cmd_research(args: list[str]) -> None:
         except Exception as e:
             warn(f"Deduplication failed ({type(e).__name__}) — skipped")
 
-        # Step 4: score + prune newly imported sources on two dimensions:
+        # Step 4: score imported sources (advisory) on two dimensions:
         #   - topic relevance: accumulated topic profile (keyword_weights)
         #   - query contribution: current --topic keywords at 2× boost
-        # Deletion runs on every import, not just near capacity.
-        step(4, total, f"Scoring + pruning new sources ({notebook_count}/300)...")
+        # Runs only when notebook is near capacity (≥250/300). No auto-delete.
+        step(4, total, f"Scoring new sources (advisory, {notebook_count}/300)...")
 
         new_ids = [s["id"] for s in sources_imported if isinstance(s, dict) and "id" in s]
 
