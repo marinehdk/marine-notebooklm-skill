@@ -38,6 +38,19 @@ from lib import client
 
 _DISTILL_TRIGGER = 270  # Suggest synthesis distillation above this source count
 
+# NLM Multi-Tier spec §3 — notebook naming convention: "{SCOPE} · {Name} · {Type}"
+_TIER_TYPE = {
+    "PROJ": "Local",
+    "GLOBAL": "Reference",
+    "DOMAIN": "Research",
+    "META": "Synthesis",
+}
+
+
+def _format_tier_title(scope: str, name: str) -> str:
+    """Wrap a user-supplied name per NLM Multi-Tier spec §3."""
+    return f"{scope} · {name} · {_TIER_TYPE[scope]}"
+
 
 def _do_browser_auth(force: bool = False) -> bool:
     """Open Chrome for Google login. Returns True if successful."""
@@ -91,11 +104,11 @@ def cmd_setup(args: list[str]) -> None:
     parser.add_argument("--add-global-notebook", nargs="+", metavar="UUID",
                         help="Append one or more notebooks as global references")
     parser.add_argument("--create-local", metavar="TITLE",
-                        help="Create a new notebook and bind it as local")
+                        help="Create a new notebook (auto-named 'PROJ · TITLE · Local') and bind it as local")
     parser.add_argument("--create-global", metavar="TITLE",
-                        help="Create a new notebook and append it as global")
+                        help="Create a new notebook (auto-named 'GLOBAL · TITLE · Reference') and append it as global")
     parser.add_argument("--create-domain", metavar="TITLE",
-                        help="Create a domain notebook. Requires --domain-key and --domain-keywords")
+                        help="Create a domain notebook (auto-named 'DOMAIN · TITLE · Research'). Requires --domain-key and --domain-keywords")
     parser.add_argument("--domain-key", metavar="KEY",
                         help="Snake_case key for the domain (e.g. navigation_algorithms)")
     parser.add_argument("--domain-keywords", metavar="KEYWORDS",
@@ -103,7 +116,7 @@ def cmd_setup(args: list[str]) -> None:
     parser.add_argument("--domain-description", metavar="DESC", default="",
                         help="Human-readable description of the domain")
     parser.add_argument("--create-synthesis", metavar="TITLE",
-                        help="Create a synthesis (meta) notebook for cross-domain queries")
+                        help="Create a synthesis notebook (auto-named 'META · TITLE · Synthesis') for cross-domain queries")
     parser.add_argument("--status", action="store_true",
                         help="Show current notebook bindings without calling API")
     parser.add_argument("--project-path", default=".", metavar="PATH")
@@ -264,7 +277,8 @@ def cmd_setup(args: list[str]) -> None:
 
     # ── Create local ──────────────────────────────────────────────────────────
     if parsed.create_local:
-        nb = client.create_notebook(parsed.create_local)
+        title = _format_tier_title("PROJ", parsed.create_local)
+        nb = client.create_notebook(title)
         meta = {"id": nb["id"], "title": nb["title"], "source_count": 0, "description": ""}
         config = load_project_config(project_path)
         config["local_notebook"] = meta
@@ -284,7 +298,8 @@ def cmd_setup(args: list[str]) -> None:
 
     # ── Create global ─────────────────────────────────────────────────────────
     if parsed.create_global:
-        nb = client.create_notebook(parsed.create_global)
+        title = _format_tier_title("GLOBAL", parsed.create_global)
+        nb = client.create_notebook(title)
         meta = {"id": nb["id"], "title": nb["title"], "source_count": 0, "description": ""}
         config = load_project_config(project_path)
         existing_global = config.get("global_notebooks", [])
@@ -325,10 +340,11 @@ def cmd_setup(args: list[str]) -> None:
             }))
             sys.exit(1)
 
-        nb = client.create_notebook(parsed.create_domain)
+        title = _format_tier_title("DOMAIN", parsed.create_domain)
+        nb = client.create_notebook(title)
         domain_meta = {
             "id": nb["id"],
-            "name": parsed.create_domain,
+            "name": title,
             "description": parsed.domain_description,
             "keywords": keywords,
             "source_count": 0,
@@ -364,8 +380,9 @@ def cmd_setup(args: list[str]) -> None:
             }))
             sys.exit(1)
 
-        nb = client.create_notebook(parsed.create_synthesis)
-        synthesis_meta = {"id": nb["id"], "name": parsed.create_synthesis, "source_count": 0, "last_distilled": None}
+        title = _format_tier_title("META", parsed.create_synthesis)
+        nb = client.create_notebook(title)
+        synthesis_meta = {"id": nb["id"], "name": title, "source_count": 0, "last_distilled": None}
         config["synthesis_notebook"] = synthesis_meta
         save_project_config(project_path, config)
         print(json.dumps({
@@ -393,7 +410,7 @@ def cmd_ask(args: list[str]) -> None:
     parser.add_argument(
         "--on-low-confidence",
         choices=["prompt", "research", "silent"],
-        default="prompt",
+        default="research",
     )
     parsed = parser.parse_args(args)
 
@@ -824,7 +841,7 @@ def cmd_research(args: list[str]) -> None:
             reason = "no new sources" if not new_ids else "min_relevance=0"
             done(4, total, f"Scoring skipped ({reason}) — {notebook_count}/300")
 
-        if notebook_count >= client._NOTEBOOK_WARN_THRESHOLD:
+        if notebook_count >= 250:  # NOTEBOOK_WARN_THRESHOLD
             new_notebook_suggestion = (
                 f"Notebook has {notebook_count}/300 sources after pruning. "
                 "Consider creating a new domain notebook: "
