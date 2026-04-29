@@ -789,6 +789,11 @@ def cmd_research(args: list[str]) -> None:
                 s for s in all_sources
                 if (s.get("url") or "").rstrip("/").lower() in cited_lower
             ]
+            if not sources_to_import:
+                # URL format mismatch between bibliography and SDK source list — fall back
+                import sys
+                print(f"[nlm] warn: bibliography has {len(cited_urls)} URLs but none matched source list; importing all sources", file=sys.stderr)
+                sources_to_import = all_sources
         else:
             sources_to_import = all_sources
         n_skipped = n_found - len(sources_to_import)
