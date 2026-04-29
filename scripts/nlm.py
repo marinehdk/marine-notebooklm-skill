@@ -849,11 +849,30 @@ def cmd_research(args: list[str]) -> None:
 
             if combined_weights:
                 try:
+                    # Build source_url_map from just-imported sources for W2 scoring
+                    source_url_map = {
+                        s["id"]: (s.get("url") or "")
+                        for s in sources_imported
+                        if isinstance(s, dict) and "id" in s
+                    }
+                    # Load citation counts for W1 scoring
+                    from lib.citation_tracker import CitationTracker
+                    citation_counts = CitationTracker(project_path).all_citation_counts()
+
                     prune_result = client.score_and_prune_sources(
                         notebook_id, new_ids, combined_weights,
+                        citation_counts=citation_counts,
+                        cited_urls=cited_urls,
+                        source_url_map=source_url_map,
                     )
                     done(4, total,
                          f"Scored {len(prune_result['scored'])} sources — {notebook_count}/300 (no auto-delete)")
+                    # Persist cited URLs for future W2 scoring of all notebook sources
+                    if cited_urls:
+                        try:
+                            CitationTracker(project_path).record_cited_urls(cited_urls)
+                        except Exception:
+                            pass
                 except Exception as e:
                     warn(f"Relevance scoring failed ({type(e).__name__}) — skipped")
                     done(4, total, f"Scoring failed — {notebook_count}/300")

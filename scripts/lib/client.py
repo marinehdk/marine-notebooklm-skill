@@ -468,22 +468,29 @@ def score_and_prune_sources(
     notebook_id: str,
     source_ids: list[str],
     topic_weights: dict[str, float],
-    min_score: float = 0.1,
+    citation_counts: dict[str, int] | None = None,
+    cited_urls: set[str] | None = None,
+    source_url_map: dict[str, str] | None = None,
 ) -> dict:
-    """Score newly imported sources via get_guide() (advisory only; no deletion).
+    """Score sources using W1+W2+W3 formula. Never deletes (advisory only).
+
+    W1 = 0.5 × citation_freq_in_chats   (strongest signal; from citation_stats.json)
+    W2 = 0.3 × cited_in_research_report (1.0 if URL cited in bibliography)
+    W3 = 0.2 × keyword_match            (bidirectional substring match)
 
     Args:
-        notebook_id:   Target notebook.
-        source_ids:    IDs of sources to evaluate (typically freshly imported).
-        topic_weights: Keyword→weight profile from TopicTracker.keyword_weights().
-                       Pass {} to skip scoring entirely (all sources kept).
-        min_score:     (reserved, no longer used for deletion; scores are advisory)
+        notebook_id:     Target notebook.
+        source_ids:      IDs of sources to evaluate (typically freshly imported).
+        topic_weights:   Keyword→weight profile from TopicTracker.keyword_weights().
+        citation_counts: {source_id: count} from CitationTracker.all_citation_counts().
+        cited_urls:      Set of URLs cited in current research report bibliography.
+        source_url_map:  {source_id: url} for the sources being scored.
 
     Returns dict with keys:
-        scored         – list of {id, keywords, summary, score, kept}
-        kept           – count of sources kept (always == len(source_ids))
+        scored         – list of {id, keywords, summary, score, w1, w2, w3, kept}
+        kept           – len(source_ids) (no deletion)
         pruned         – always 0 (spec §3.3.5: no auto-delete)
-        notebook_count – same as kept; for caller use
+        notebook_count – same as kept
     """
     async def _guide_one(client, sid: str) -> tuple[str, dict | Exception]:
         try:
@@ -493,35 +500,57 @@ def score_and_prune_sources(
 
     async def _run():
         async with await NotebookLMClient.from_storage() as client:
-            # Fetch all guides in parallel
             pairs = await asyncio.gather(*[_guide_one(client, sid) for sid in source_ids])
 
-            scored = []
+            # Pre-compute normalised W1 denominator
+            max_count = max(citation_counts.values()) if citation_counts else 0
+            cited_lower = (
+                {u.rstrip("/").lower() for u in cited_urls} if cited_urls else set()
+            )
 
+            scored = []
             for sid, guide in pairs:
                 if isinstance(guide, Exception):
-                    # Can't score → keep by default
                     scored.append({"id": sid, "score": None, "kept": True,
                                    "error": type(guide).__name__})
                     continue
 
                 keywords = guide.get("keywords", [])
-                score = _score_keywords(keywords, topic_weights)
+
+                # W3: keyword match (0.2 weight)
+                w3 = _score_keywords(keywords, topic_weights)
+
+                # W2: cited in research report bibliography (0.3 weight)
+                source_url = (source_url_map or {}).get(sid, "")
+                w2 = 1.0 if (
+                    source_url
+                    and source_url.rstrip("/").lower() in cited_lower
+                ) else 0.0
+
+                # W1: citation frequency in past ask() results (0.5 weight)
+                w1 = 0.0
+                if citation_counts and max_count > 0:
+                    w1 = citation_counts.get(sid, 0) / max_count
+
+                score = 0.5 * w1 + 0.3 * w2 + 0.2 * w3
+
                 scored.append({
                     "id": sid,
                     "keywords": keywords,
                     "summary": (guide.get("summary") or "")[:120],
                     "score": round(score, 3),
-                    "kept": True,  # GAP-1/spec §3.3.5: never auto-delete; advisory only
+                    "w1": round(w1, 3),
+                    "w2": round(w2, 3),
+                    "w3": round(w3, 3),
+                    "kept": True,
                 })
 
-            # GAP-4: notebook_count field; GAP-1: no deletion
-            return {
-                "scored": scored,
-                "kept": len(scored),
-                "pruned": 0,
-                "notebook_count": len(scored),
-            }
+        return {
+            "scored": scored,
+            "kept": len(scored),
+            "pruned": 0,
+            "notebook_count": len(scored),
+        }
 
     return asyncio.run(_run())
 
