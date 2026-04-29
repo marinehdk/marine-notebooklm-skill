@@ -613,6 +613,15 @@ def cmd_ask(args: list[str]) -> None:
     except Exception:
         pass
 
+    # GAP-10: accumulate citation frequency from ChatReference (spec §3.2.5 Step 7)
+    try:
+        from lib.citation_tracker import CitationTracker
+        cites = result.get("citations") or []
+        if cites:
+            CitationTracker(project_path).record_citations(cites)
+    except Exception:
+        pass
+
     # Surface suggest_research when no useful answer was found
     if result.get("confidence") in ("low", "not_found"):
         result["suggest_research"] = True

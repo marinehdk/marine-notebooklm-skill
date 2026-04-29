@@ -38,9 +38,21 @@ def ask(notebook_id: str, question: str, retries: int = 2, retry_delay: float = 
                     timeout=_ASK_TIMEOUT
                 ) as client:
                     result = await client.chat.ask(notebook_id, question)
+                    citations = [
+                        {
+                            "citation_number": i,
+                            "text": getattr(ref, "text", "") or "",
+                            "source_id": (
+                                getattr(ref, "source_id", None)
+                                or getattr(ref, "id", None)
+                            ),
+                        }
+                        for i, ref in enumerate(result.references or [], 1)
+                    ]
                     return {
                         "answer": result.answer,
                         "confidence": _confidence(result.answer, result.references),
+                        "citations": citations,
                     }
             except NetworkError as e:
                 if attempt < retries:
@@ -53,7 +65,7 @@ def ask(notebook_id: str, question: str, retries: int = 2, retry_delay: float = 
 async def ask_async(notebook_id: str, question: str, retries: int = 2, retry_delay: float = 3.0) -> dict[str, Any]:
     """Async version of ask() for parallel execution of Phase 1 and Phase 3.
 
-    Returns dict with 'answer' and 'confidence' keys.
+    Returns dict with 'answer', 'confidence', and 'citations' keys.
     Same retry logic and timeout handling as sync version.
     """
     for attempt in range(retries + 1):
@@ -62,9 +74,21 @@ async def ask_async(notebook_id: str, question: str, retries: int = 2, retry_del
                 timeout=_ASK_TIMEOUT
             ) as client:
                 result = await client.chat.ask(notebook_id, question)
+                citations = [
+                    {
+                        "citation_number": i,
+                        "text": getattr(ref, "text", "") or "",
+                        "source_id": (
+                            getattr(ref, "source_id", None)
+                            or getattr(ref, "id", None)
+                        ),
+                    }
+                    for i, ref in enumerate(result.references or [], 1)
+                ]
                 return {
                     "answer": result.answer,
                     "confidence": _confidence(result.answer, result.references),
+                    "citations": citations,
                 }
         except NetworkError as e:
             if attempt < retries:
