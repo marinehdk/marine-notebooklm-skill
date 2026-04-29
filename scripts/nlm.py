@@ -954,20 +954,54 @@ def cmd_add(args: list[str]) -> None:
     parser.add_argument("--url", help="Add a web URL as source")
     parser.add_argument("--note", help="Add text content as a note")
     parser.add_argument("--title", default="Note", help="Title for text note")
+    parser.add_argument(
+        "--target", default="local",
+        help="Target notebook: local (default), synthesis, or domain:<key>",
+    )
     parser.add_argument("--project-path", default=".")
     parsed = parser.parse_args(args)
 
     if not parsed.url and not parsed.note:
         print(json.dumps({"error": "Provide --url or --note"}))
         sys.exit(1)
+    if parsed.url and parsed.note:
+        print(json.dumps({"error": "Provide --url or --note, not both"}))
+        sys.exit(1)
 
     assert_authenticated()
     project_path = Path(parsed.project_path).expanduser().resolve()
     cfg = load_project_config(project_path)
-    notebook_id = _resolve_local_id(cfg)
 
-    if not notebook_id:
-        print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+    # Resolve target notebook (mirrors cmd_research target resolution)
+    if parsed.target == "local":
+        notebook_id = _resolve_local_id(cfg)
+        target_label = "local"
+        if not notebook_id:
+            print(json.dumps({"error": "No local notebook configured. Run: nlm setup"}))
+            sys.exit(1)
+    elif parsed.target == "synthesis":
+        notebook_id = _resolve_synthesis_id(cfg)
+        target_label = "synthesis"
+        if not notebook_id:
+            print(json.dumps({"error": "No synthesis notebook configured. Run: nlm setup --create-synthesis \"<title>\""}))
+            sys.exit(1)
+    elif parsed.target.startswith("domain:"):
+        key = parsed.target[len("domain:"):]
+        domain_nbs = _resolve_domain_notebooks(cfg)
+        if nb_entry := domain_nbs.get(key):
+            notebook_id = nb_entry.get("id")
+            target_label = f"domain:{key}"
+            if not notebook_id:
+                print(json.dumps({"error": f"Domain '{key}' has no notebook ID. Re-run: nlm setup"}))
+                sys.exit(1)
+        else:
+            print(json.dumps({
+                "error": f"Domain '{key}' not found in config.",
+                "available": list(domain_nbs.keys()),
+            }))
+            sys.exit(1)
+    else:
+        print(json.dumps({"error": f"Unknown --target '{parsed.target}'. Use: local, synthesis, or domain:<key>"}))
         sys.exit(1)
 
     if parsed.url:
@@ -976,13 +1010,24 @@ def cmd_add(args: list[str]) -> None:
             print(json.dumps({
                 "status": "skipped",
                 "reason": "already_exists",
+                "target": target_label,
                 "source": {"id": result["id"], "title": result["title"]},
             }, indent=2, ensure_ascii=False))
         else:
-            print(json.dumps({"status": "ok", "type": "url", "source": result}, indent=2, ensure_ascii=False))
+            print(json.dumps({
+                "status": "ok",
+                "type": "url",
+                "target": target_label,
+                "source": result,
+            }, indent=2, ensure_ascii=False))
     else:
         result = client.add_note(notebook_id, title=parsed.title, content=parsed.note)
-        print(json.dumps({"status": "ok", "type": "note", "note": result}, indent=2, ensure_ascii=False))
+        print(json.dumps({
+            "status": "ok",
+            "type": "note",
+            "target": target_label,
+            "note": result,
+        }, indent=2, ensure_ascii=False))
 
 
 def cmd_delete(args: list[str]) -> None:
