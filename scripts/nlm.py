@@ -682,7 +682,7 @@ def cmd_research(args: list[str]) -> None:
     )
     parser.add_argument(
         "--min-relevance", type=float, default=0.1,
-        help="Sources scoring below this threshold are deleted after every import. Default: 0.1.",
+        help="(advisory) Minimum relevance score for source retention hint. Scoring is advisory only — no sources are deleted. Default: 0.1.",
     )
     parser.add_argument("--project-path", default=".")
     parsed = parser.parse_args(args)
@@ -800,7 +800,6 @@ def cmd_research(args: list[str]) -> None:
             ]
             if not sources_to_import:
                 # URL format mismatch between bibliography and SDK source list — fall back
-                import sys
                 print(f"[nlm] warn: bibliography has {len(cited_urls)} URLs but none matched source list; importing all sources", file=sys.stderr)
                 sources_to_import = all_sources
         else:
