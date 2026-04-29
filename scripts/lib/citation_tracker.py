@@ -21,8 +21,11 @@ class CitationTracker:
 
     def record_citations(self, citations: list[dict]) -> None:
         """Increment citation count for each source_id in an ask() citations list."""
+        if not citations:
+            return
         data = self._load()
         now = int(time.time())
+        changed = False
         for cite in citations:
             source_id = cite.get("source_id")
             if not source_id:
@@ -33,13 +36,20 @@ class CitationTracker:
             )
             entry["count"] += 1
             entry["last_cited_at"] = now
-        self._save(data)
+            changed = True
+        if changed:
+            self._save(data)
 
     def record_cited_urls(self, urls: set[str]) -> None:
         """Persist the set of URLs cited in a deep research report bibliography."""
+        if not urls:
+            return
         data = self._load()
         existing = set(data.get("cited_urls", []))
-        existing.update(urls)
+        new_urls = urls - existing
+        if not new_urls:
+            return
+        existing.update(new_urls)
         data["cited_urls"] = sorted(existing)
         self._save(data)
 
@@ -81,4 +91,6 @@ class CitationTracker:
 
     def _save(self, data: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        tmp = self._path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        tmp.replace(self._path)  # atomic on POSIX
