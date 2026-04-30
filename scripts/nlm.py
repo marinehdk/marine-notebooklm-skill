@@ -118,6 +118,10 @@ def cmd_setup(args: list[str]) -> None:
                         help="Human-readable description of the domain")
     parser.add_argument("--create-synthesis", metavar="TITLE",
                         help="Create a synthesis notebook (auto-named 'META · TITLE · Synthesis') for cross-domain queries")
+    parser.add_argument("--add-domain-notebook", metavar="UUID",
+                        help="Bind an existing notebook as a domain notebook. Requires --domain-key and --domain-keywords")
+    parser.add_argument("--add-synthesis-notebook", metavar="UUID",
+                        help="Bind an existing notebook as the synthesis (META) notebook")
     parser.add_argument("--status", action="store_true",
                         help="Show current notebook bindings without calling API")
     parser.add_argument("--project-path", default=".", metavar="PATH")
@@ -139,7 +143,8 @@ def cmd_setup(args: list[str]) -> None:
     if parsed.status or not any([parsed.notebook_list, parsed.add_local_notebook,
                                  parsed.add_global_notebook, parsed.create_local,
                                  parsed.create_global, parsed.create_domain,
-                                 parsed.create_synthesis]):
+                                 parsed.create_synthesis, parsed.add_domain_notebook,
+                                 parsed.add_synthesis_notebook]):
         config = load_project_config(project_path)
         print(json.dumps({
             "status": "ok",
@@ -273,6 +278,87 @@ def cmd_setup(args: list[str]) -> None:
             "added": added,
             "global_notebooks_total": len(existing_global),
             "next_step": _next_step_after_global(),
+        }, indent=2, ensure_ascii=False))
+        return
+
+    # ── Add domain notebook (bind existing) ──────────────────────────────────
+    if parsed.add_domain_notebook:
+        if not parsed.domain_key:
+            print(json.dumps({"error": "--domain-key is required with --add-domain-notebook (e.g. colav_algorithms)"}))
+            sys.exit(1)
+        if not parsed.domain_keywords:
+            print(json.dumps({"error": "--domain-keywords is required with --add-domain-notebook (e.g. 'COLREGS,path planning')"}))
+            sys.exit(1)
+
+        domain_key = parsed.domain_key.lower().replace(" ", "_").replace("-", "_")
+        keywords = [kw.strip() for kw in parsed.domain_keywords.split(",") if kw.strip()]
+
+        config = load_project_config(project_path)
+        existing_domains = config.get("domain_notebooks", {})
+        if domain_key in existing_domains:
+            print(json.dumps({
+                "error": f"Domain '{domain_key}' already exists.",
+                "existing": existing_domains[domain_key],
+            }))
+            sys.exit(1)
+
+        meta = _get_nb_meta(parsed.add_domain_notebook)
+        domain_meta = {
+            "id": meta["id"],
+            "name": meta["title"],
+            "description": parsed.domain_description,
+            "keywords": keywords,
+            "source_count": meta.get("source_count", 0),
+            "last_distilled": None,
+        }
+        existing_domains[domain_key] = domain_meta
+        config["domain_notebooks"] = existing_domains
+        save_project_config(project_path, config)
+        print(json.dumps({
+            "status": "ok",
+            "bound": "domain",
+            "created": False,
+            "domain_key": domain_key,
+            "domain_notebook": domain_meta,
+            "total_domains": len(existing_domains),
+            "next_step": {
+                "hint": "域笔记本已绑定。运行 /nlm-research 时来源将自动路由至此。",
+                "commands": [
+                    f'nlm research --topic "你的领域话题" --target domain:{domain_key}',
+                    f'nlm ask --question "你的领域问题" --scope domain:{domain_key}',
+                ],
+            },
+        }, indent=2, ensure_ascii=False))
+        return
+
+    # ── Add synthesis notebook (bind existing) ────────────────────────────────
+    if parsed.add_synthesis_notebook:
+        config = load_project_config(project_path)
+        if config.get("synthesis_notebook"):
+            print(json.dumps({
+                "error": "Synthesis notebook already configured.",
+                "synthesis_notebook": config["synthesis_notebook"],
+            }))
+            sys.exit(1)
+
+        meta = _get_nb_meta(parsed.add_synthesis_notebook)
+        synthesis_meta = {
+            "id": meta["id"],
+            "name": meta["title"],
+            "source_count": meta.get("source_count", 0),
+            "last_distilled": None,
+        }
+        config["synthesis_notebook"] = synthesis_meta
+        save_project_config(project_path, config)
+        print(json.dumps({
+            "status": "ok",
+            "bound": "synthesis",
+            "created": False,
+            "synthesis_notebook": synthesis_meta,
+            "next_step": {
+                "hint": "母笔记本已绑定。当域笔记本超过 270 来源时，蒸馏 Briefing Doc 后通过 nlm-add 导入此本。",
+                "commands": ["nlm add --note '<Briefing Doc内容>' --title '<域名> Briefing' --target synthesis"],
+            },
         }, indent=2, ensure_ascii=False))
         return
 
