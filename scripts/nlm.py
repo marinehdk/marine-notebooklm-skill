@@ -763,7 +763,12 @@ def cmd_research(args: list[str]) -> None:
     timeout_label = "60s" if parsed.depth == "fast" else "600s"
 
     step(1, total, f"Starting {parsed.depth} research (timeout: {timeout_label}): {parsed.topic[:60]}...")
-    result = client.research(notebook_id, parsed.topic, mode=parsed.depth)
+    try:
+        result = client.research(notebook_id, parsed.topic, mode=parsed.depth)
+    except Exception as e:
+        warn(f"Research failed: {type(e).__name__}: {e}")
+        print(json.dumps({"error": f"Research failed: {type(e).__name__}: {e}", "topic": parsed.topic}))
+        sys.exit(1)
 
     if result["status"] == "timeout":
         warn(f"Research timed out after {timeout_label}")
