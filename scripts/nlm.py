@@ -597,6 +597,10 @@ def cmd_ask(args: list[str]) -> None:
 
     # ── Scope: auto ───────────────────────────────────────────────────────────
     else:  # auto (and unrecognised values fall through gracefully)
+        # LEGACY PATH: classify_domain is a keyword-only fallback.
+        # When invoked from the nlm skill (SKILL.md), --scope is always explicit
+        # (e.g. domain:<key>, local, synthesis). --scope auto only fires for
+        # direct CLI usage without Agent context.
         # Phase 1: classify question to find relevant domain
         routing = classify_domain(parsed.question, project_path)
         if routing.startswith("NEW:") or routing == "local" or not domain_notebooks:
@@ -784,6 +788,11 @@ def cmd_research(args: list[str]) -> None:
     target_notebook_name: str = "local"
 
     if parsed.target == "auto":
+        # LEGACY PATH: classify_domain is a keyword-only fallback.
+        # When invoked from the nlm-research skill (SKILL.md), --target is always
+        # explicit (e.g. domain:<key>, local, synthesis) — Agent performs semantic
+        # routing before calling invoke.sh. --target auto only fires for direct
+        # CLI usage without Agent context.
         routing = classify_domain(parsed.topic, project_path)
         if routing.startswith("NEW:"):
             domain_suggestion = {

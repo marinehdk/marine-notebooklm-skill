@@ -1,6 +1,19 @@
 """Classify a topic or query into a domain notebook key.
 
-No external LLM calls — pure local keyword matching against config domain definitions.
+LEGACY FALLBACK — This classifier is a pure keyword matcher with no LLM reasoning.
+It is intentionally bypassed when invoked from an Agent skill layer:
+  - nlm-research/SKILL.md mandates explicit --target domain:<key>
+  - nlm/SKILL.md mandates explicit --scope domain:<key>
+
+This module is retained for:
+  1. Direct CLI usage (no Agent context)
+  2. The --target auto / --scope auto fallback path in nlm.py
+  3. Future replacement with a lightweight LLM-based classifier if desired
+
+Known limitations:
+  - Chinese text tokenizer produces oversized tokens → always scores 0
+  - Domain keyword lists must be manually maintained
+  - Returns NEW:<name> for most real-world cross-domain topics
 
 Returns one of:
   domain_key   — matched domain from config.domain_notebooks

@@ -24,15 +24,30 @@ $INVOKE setup --auth
 ```
 If `authenticated: false` → tell user to run `notebooklm login` in terminal and retry.
 
+## Routing (REQUIRED before ask or research)
+
+Read domain definitions first, then pick an explicit scope/target. **Never use `--scope auto` or `--target auto`** — the shell keyword classifier has no LLM context.
+
+```bash
+cat "$(pwd)/.nlm/config.json"   # read domain_notebooks: name, keywords, description
+```
+
+| Question/Topic type | ask --scope | research --target |
+|---------------------|-------------|-------------------|
+| Matches one domain | `domain:<key>` | `domain:<key>` |
+| Spans 2+ domains | run parallel asks | parallel dispatch |
+| Project-specific | `local` | `local` |
+| Cross-domain synthesis | `synthesis` | `synthesis` |
+
+Multi-domain → dispatch parallel subagents, each with an explicit single-domain target.
+
 ## ask — Quick knowledge query
 
 ```bash
-$INVOKE ask --question "<question>" --project-path "." --scope auto --format json
+$INVOKE ask --question "<question>" --project-path "." --scope domain:<key> --format json
 ```
 
 Output: `{ answer, confidence, source_notebook, citations[] }`
-
-**Auto-routing:** `--scope auto` queries local notebook first; if confidence is `low` or `not_found`, falls back to global notebooks.
 
 **On confidence:**
 - `high` / `medium` → use the answer
